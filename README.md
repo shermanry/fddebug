@@ -1,4 +1,4 @@
-| f版本/version | 舵机支持/Servo support              | 功能描述/description                                         | 状态                        |
+| 版本/version | 舵机支持/Servo support              | 功能描述/description                                         | 状态                        |
 | ----------------- | ----------------------------------- | ------------------------------------------------------------ | --------------------------- |
 | FD1.9.6            | SCS/SMS                             |                                                              | 已停止维护/Stop maintenance |
 | FD1.9.7            | SCS/SMS                             |                                                              | 已停止维护/Stop maintenance |
