@@ -9,5 +9,6 @@
 | FD1.9.8.4          | 飞特全系列舵机/FT full series Servo | 兼容V1.9.8.3、增加HTS/HLS舵机支持/Compatible with v1.9.8.3, add support for HTS/HLS servos | 稳定版本/Stable version |
 | FD1.9.8.5          | 飞特全系列舵机/FT full series Servo | 兼容V1.9.8.4、增加中英文切换功能/Compatible with v1.9.8.4, Add Chinese English switching function | 稳定版本/Stable version |
 | RC_Servo_Assist_2.3 | 飞特RCPWM舵机调试/FT RC servo debug |  | 稳定版本/Stable version |
+| RC_Servo_Assist_2.4 | 飞特RCPWM舵机调试/FT RC servo debug | 修正英文界面显示BUG/Fix English interface display bug | 稳定版本/Stable version |
 | FUServo_Debuger_1.0 | 飞特uavcan总线舵机调试/FT uavcan servo debug |  | 稳定版本/Stable version |
 | FUServo_Debuger_2.0 | 飞特uavcan总线舵机调试/FT uavcan servo debug | 优化UAVCAN调试功能/Optimize UAVCAN debugging function | 稳定版本/Stable version |
