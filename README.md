@@ -10,5 +10,4 @@
 | FD1.9.8.5          | 飞特全系列舵机/FT full series Servo | 兼容V1.9.8.4、增加中英文切换功能/Compatible with v1.9.8.4, Add Chinese English switching function | 稳定版本/Stable version |
 | RC_Servo_Assist_2.3 | 飞特RCPWM舵机调试/FT RC servo debug |  | 稳定版本/Stable version |
 | RC_Servo_Assist_2.4 | 飞特RCPWM舵机调试/FT RC servo debug | 修复英文界面显示BUG，增加SLCAN协议支持，增加FU舵机调试/Fix English interface bug, support SLCAN protocol, add FU servo debug | 测试版本/Test version |
-| FUServo_Debuger_1.0 | 飞特uavcan总线舵机调试/FT uavcan servo debug |  | 已停止维护/Stop maintenance |
 | FUServo_Debuger_2.0 | 飞特uavcan总线舵机调试/FT uavcan servo debug | 优化UAVCAN调试功能/Optimize UAVCAN debugging function | 已停止维护/Stop maintenance |
