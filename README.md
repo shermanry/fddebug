@@ -11,3 +11,4 @@
 | RC_Servo_Assist_2.3 | 飞特RCPWM舵机调试/FT RC servo debug |  | 稳定版本/Stable version |
 | RC_Servo_Assist_2.4 | 飞特RCPWM舵机调试/FT RC servo debug | 修复英文界面显示BUG/Fix English interface bug | 测试版本/Test version |
 | FUServo_Debuger_2.0 | 飞特uavcan总线舵机调试/FT uavcan servo debug | 优化UAVCAN调试功能/Optimize UAVCAN debugging function | 稳定版本/Stable version |
+| FTCanDebug-251119 | 飞特FU/SH CAN总线舵机调试/FT FU/SH CAN servo debug | | 测试版本/Test version |
