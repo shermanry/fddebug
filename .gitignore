@@ -1,0 +1,62 @@
+# Release builds
+releases/
+
+# Extracted SDK reference files (not our code)
+extracted/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+venv/
+.venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Visual Studio
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.pdb
+*.exe
+*.dll
+*.obj
+*.log
+bin/
+obj/
+Debug/
+Release/
