@@ -70,8 +70,8 @@ class SCSReg(IntEnum):
     UNLOADING_CONDITION = 19  # Unloading behavior setting
     LED_ALARM_CONDITION = 20  # LED alarm triggers
     P_COEFFICIENT = 21        # PID - Proportional
-    D_COEFFICIENT = 22        # PID - Derivative
-    I_COEFFICIENT = 23        # PID - Integral
+    I_COEFFICIENT = 22        # PID - Integral (SCS order is P, I, D per official SDK)
+    D_COEFFICIENT = 23        # PID - Derivative
     PUNCH_L = 24              # Minimum PWM (startup force)
     PUNCH_H = 25
     CW_DEAD = 26              # Clockwise dead band
@@ -138,8 +138,8 @@ class SMSReg(IntEnum):
     UNLOADING_CONDITION = 19  # Unloading behavior
     LED_ALARM_CONDITION = 20  # LED alarm triggers
     P_COEFFICIENT = 21        # PID - Proportional
-    D_COEFFICIENT = 22        # PID - Derivative
-    I_COEFFICIENT = 23        # PID - Integral
+    I_COEFFICIENT = 22        # PID - Integral (STS/SMS order is P, I, D per official SDK)
+    D_COEFFICIENT = 23        # PID - Derivative
     PUNCH_L = 24              # Minimum PWM (startup force)
     PUNCH_H = 25
     CW_DEAD = 26              # Clockwise dead band
@@ -147,9 +147,9 @@ class SMSReg(IntEnum):
     PROTECTION_CURRENT_L = 28 # Overload protection current
     PROTECTION_CURRENT_H = 29
     ANGULAR_RESOLUTION = 30   # Position resolution
-    OFS_L = 31                # Position offset
+    OFS_L = 31                # Position offset (sign-magnitude: bit 15 = sign)
     OFS_H = 32
-    MODE = 33                 # 0=position, 1=wheel, 2=PWM, 3=step
+    MODE = 33                 # 0=position, 1=wheel, 2=PWM, 3=multi-turn
     PROTECTION_TORQUE = 34    # Overload torque threshold
     PROTECTION_TIME = 35      # Overload time threshold (seconds)
     OVERLOAD_TORQUE = 36      # Startup overload torque
@@ -501,6 +501,54 @@ class FeetechServo:
         else:  # Little endian
             return (high << 8) | low
     
+    def _to_sign_magnitude(self, value: int, sign_bit: int = 15) -> int:
+        """
+        Convert signed integer to sign-magnitude encoding.
+        
+        Per official Feetech SDK: negative values use bit at 'sign_bit' position
+        for the sign, with remaining bits as magnitude.
+        
+        Examples with sign_bit=15:
+          100 -> 100 (0x0064)
+          -100 -> 32868 (0x8064 = 0x8000 | 100)
+        
+        Args:
+            value: Signed integer to convert
+            sign_bit: Bit position for sign (15 for position, 10 for speed/PWM)
+        
+        Returns:
+            Sign-magnitude encoded value
+        
+        Note: Values are clamped to valid range to prevent encoding errors.
+              For sign_bit=15: -32767 to +32767
+              For sign_bit=10: -1023 to +1023
+        """
+        max_magnitude = (1 << sign_bit) - 1  # 32767 for bit 15, 1023 for bit 10
+        
+        if value < 0:
+            magnitude = min(-value, max_magnitude)
+            return magnitude | (1 << sign_bit)
+        else:
+            return min(value, max_magnitude)
+    
+    def _from_sign_magnitude(self, value: int, sign_bit: int = 15) -> int:
+        """
+        Convert sign-magnitude encoding to signed integer.
+        
+        Per official Feetech SDK: bit at 'sign_bit' indicates negative,
+        remaining bits are magnitude.
+        
+        Args:
+            value: Sign-magnitude encoded value
+            sign_bit: Bit position for sign (15 for position, 10 for speed)
+        
+        Returns:
+            Signed integer
+        """
+        if value & (1 << sign_bit):
+            return -(value & ~(1 << sign_bit))
+        return value
+    
     def _write_buf(self, servo_id: int, mem_addr: int, data: bytes, instruction: int):
         """Build and send instruction packet"""
         if data:
@@ -624,38 +672,52 @@ class FeetechServo:
         """
         Detect servo type (SCS or STS) by reading registers
         
+        Detection strategy:
+        1. Check lock registers first (most reliable)
+        2. Use max limit value as secondary confirmation
+        
         Returns:
             'scs' or 'sts'
         """
         # Save current endianness
         old_end = self.end
         
+        # First, check lock registers - this is the most reliable method
+        # STS/SMS lock is at address 55, should be 0 or 1
+        # SCS lock is at address 48, should be 0 or 1
+        lock_55 = self.read_byte(servo_id, SMSReg.LOCK)  # STS lock at 55
+        lock_48 = self.read_byte(servo_id, SCSReg.LOCK)  # SCS lock at 48
+        
+        # STS servo: lock at 55 is valid (0 or 1), lock at 48 is garbage
+        if lock_55 in [0, 1] and lock_48 not in [0, 1]:
+            self.end = old_end
+            return 'sts'
+        
+        # SCS servo: lock at 48 is valid (0 or 1), lock at 55 is garbage
+        if lock_48 in [0, 1] and lock_55 not in [0, 1]:
+            self.end = old_end
+            return 'scs'
+        
+        # Both locks look valid - fall back to max limit check
         # Try reading max limit with little-endian (STS default)
         self.end = 0
         max_limit = self.read_word(servo_id, SCSReg.MAX_ANGLE_LIMIT_L)
         
-        # If max limit is impossibly high (> 4096), we're reading with wrong endianness
-        # This means it's an SCS servo that needs big-endian
-        if max_limit > 4096:
-            self.end = old_end
-            return 'scs'
-        
-        # If max limit is around 4095, it's likely STS (12-bit)
-        if max_limit > 1500:
-            self.end = old_end
-            return 'sts'
-        
-        # Check lock registers to confirm
-        lock_48 = self.read_byte(servo_id, SCSReg.LOCK)  # SCS lock at 48
-        lock_55 = self.read_byte(servo_id, SMSReg.LOCK)  # STS lock at 55
-        
         self.end = old_end
         
-        # SCS: lock at 48 is typically 1 (locked)
-        if lock_48 == 1 and lock_55 != 1:
+        # If reading LE gives value > 4096, it's IMPOSSIBLE for any servo
+        # This means it's an SCS servo (big-endian) being misread as little-endian
+        # Example: SCS bytes [0x02, 0x12] read as LE = 4610, but BE = 530
+        if max_limit > 4096:
             return 'scs'
         
-        return 'sts'
+        # If max limit is in 12-bit range (1024-4096), it's likely STS
+        if max_limit > 1023:
+            return 'sts'
+        
+        # Max limit in 10-bit range (0-1023), could be either
+        # Default to SCS for low values since STS typically has higher defaults
+        return 'scs'
     
     # ========================================================================
     # Read/Write Operations
@@ -668,8 +730,23 @@ class FeetechServo:
         return self._ack(servo_id)
     
     def write_word(self, servo_id: int, address: int, value: int) -> bool:
-        """Write 16-bit word to servo memory"""
-        low, high = self._host2scs(value)
+        """Write 16-bit word to servo memory (unsigned)"""
+        low, high = self._host2scs(value & 0xFFFF)
+        self.serial.reset_input_buffer()
+        self._write_buf(servo_id, address, bytes([low, high]), Instruction.WRITE)
+        return self._ack(servo_id)
+    
+    def write_word_signed(self, servo_id: int, address: int, value: int) -> bool:
+        """Write 16-bit signed word using sign-magnitude encoding (for STS/SMS).
+        
+        Per official Feetech SDK:
+        - Negative values: bit 15 = 1, bits 0-14 = magnitude
+        - Positive values: bit 15 = 0, bits 0-14 = value
+        
+        Use this for angle limits, offsets, and other signed EPROM values on STS/SMS.
+        """
+        encoded = self._to_sign_magnitude(value, 15)
+        low, high = self._host2scs(encoded)
         self.serial.reset_input_buffer()
         self._write_buf(servo_id, address, bytes([low, high]), Instruction.WRITE)
         return self._ack(servo_id)
@@ -734,16 +811,23 @@ class FeetechServo:
         
         Args:
             servo_id: Servo ID
-            position: Target position (can be signed for multi-turn mode)
+            position: Target position (can be signed for STS/SMS multi-turn mode)
             time_ms: Movement time in milliseconds (0 = use speed)
             speed: Maximum speed in steps/second (0 = maximum)
         
         Returns:
             True if command sent successfully
+        
+        Note: Per official SDK:
+        - SCS servos: position is unsigned (no sign-magnitude)
+        - STS/SMS servos: position uses sign-magnitude with bit 15
         """
-        # Handle signed position for multi-turn mode
-        if position < 0:
-            position = 0x10000 + position
+        # Handle signed position for STS/SMS only (per official SDK)
+        # SCS servos don't support negative positions
+        if self.end == 0:  # Little-endian = STS/SMS
+            position = self._to_sign_magnitude(position, 15)
+        else:  # Big-endian = SCS (unsigned only)
+            position = max(0, position) & 0xFFFF
         
         pos_l, pos_h = self._host2scs(position & 0xFFFF)
         time_l, time_h = self._host2scs(time_ms)
@@ -755,32 +839,62 @@ class FeetechServo:
         return self._ack(servo_id)
     
     def read_position(self, servo_id: int) -> int:
-        """Read current position (unsigned)"""
-        return self.read_word(servo_id, SCSReg.PRESENT_POSITION_L)
+        """Read current position.
+        
+        Per official SDK:
+        - SCS: Returns unsigned value (0-1023)
+        - STS/SMS: Decodes sign-magnitude (bit 15 = sign)
+        
+        For STS multi-turn mode, this can return negative values.
+        """
+        pos = self.read_word(servo_id, SCSReg.PRESENT_POSITION_L)
+        if pos >= 0 and self.end == 0:  # STS/SMS (little-endian)
+            return self._from_sign_magnitude(pos, 15)
+        return pos  # SCS or error
     
     def read_position_signed(self, servo_id: int) -> int:
-        """Read current position as signed value (for multi-turn mode)"""
+        """Read current position as signed value (for STS/SMS multi-turn mode)
+        
+        Per official SDK:
+        - STS/SMS: Uses sign-magnitude decoding (bit 15 = sign)
+        - SCS: Always unsigned (no multi-turn support)
+        """
         pos = self.read_word(servo_id, SCSReg.PRESENT_POSITION_L)
         if pos >= 0:
-            return pos if pos < 32768 else pos - 65536
+            # Only decode sign-magnitude for STS/SMS (little-endian)
+            if self.end == 0:
+                return self._from_sign_magnitude(pos, 15)
+            # SCS is always unsigned
+            return pos
         return pos
     
     def read_word_signed(self, servo_id: int, address: int) -> int:
-        """Read 16-bit signed value from servo memory"""
+        """Read 16-bit signed value from servo memory
+        
+        Uses sign-magnitude decoding per official Feetech SDK:
+        Bit 15 = sign, Bits 0-14 = magnitude
+        """
         val = self.read_word(servo_id, address)
         if val >= 0:
-            return val if val < 32768 else val - 65536
+            return self._from_sign_magnitude(val, 15)
         return val
     
     def read_speed(self, servo_id: int) -> int:
-        """Read current speed (signed - negative means reverse direction)"""
+        """Read current speed (signed - negative means reverse direction)
+        
+        Uses sign-magnitude with bit 15 per official Feetech SDK.
+        """
         speed = self.read_word(servo_id, SCSReg.PRESENT_SPEED_L)
         if speed >= 0:
-            return speed if speed < 32768 else speed - 65536
+            return self._from_sign_magnitude(speed, 15)
         return speed
     
     def read_load(self, servo_id: int) -> int:
-        """Read current load (bit 10 = direction, bits 0-9 = magnitude 0-1023)"""
+        """Read current load (bit 10 = direction, bits 0-9 = magnitude 0-1023)
+        
+        Per official SDK: bit 10 indicates direction, not a sign-magnitude value.
+        Returns raw value; caller should mask appropriately.
+        """
         return self.read_word(servo_id, SCSReg.PRESENT_LOAD_L)
     
     def read_voltage(self, servo_id: int) -> float:
@@ -870,12 +984,23 @@ class FeetechServo:
         return result
     
     def set_angle_limits(self, servo_id: int, min_angle: int, max_angle: int, servo_type: str = None) -> bool:
-        """Set servo angle limits"""
+        """Set servo angle limits
+        
+        For STS/SMS servos, limits can be signed (for multi-turn mode).
+        For SCS servos, limits are always unsigned (0 to max_position).
+        """
         if not self.unlock_eprom(servo_id, servo_type):
             return False
         
-        self.write_word(servo_id, SCSReg.MIN_ANGLE_LIMIT_L, min_angle)
-        self.write_word(servo_id, SCSReg.MAX_ANGLE_LIMIT_L, max_angle)
+        type_class = self.get_type_class(servo_type)
+        if type_class.supports_multi_turn:
+            # STS/SMS: Use sign-magnitude encoding for signed limits
+            self.write_word_signed(servo_id, SCSReg.MIN_ANGLE_LIMIT_L, min_angle)
+            self.write_word_signed(servo_id, SCSReg.MAX_ANGLE_LIMIT_L, max_angle)
+        else:
+            # SCS: Unsigned limits only
+            self.write_word(servo_id, SCSReg.MIN_ANGLE_LIMIT_L, max(0, min_angle))
+            self.write_word(servo_id, SCSReg.MAX_ANGLE_LIMIT_L, max(0, max_angle))
         
         return self.lock_eprom(servo_id, servo_type)
     
@@ -895,7 +1020,7 @@ class FeetechServo:
         """
         Set servo mode (STS/SMS only)
         
-        Modes: 0=Position, 1=Wheel, 2=PWM, 3=Step
+        Modes: 0=Position, 1=Wheel, 2=PWM, 3=Multi-turn
         """
         type_class = self.get_type_class('sts')
         if not type_class.supports_mode:
@@ -912,19 +1037,18 @@ class FeetechServo:
         Set position offset (STS/SMS only)
         
         Args:
-            offset: Signed offset value
+            offset: Signed offset value (-32767 to +32767)
+        
+        Uses sign-magnitude encoding per official Feetech SDK.
         """
         type_class = self.get_type_class('sts')
         if not type_class.supports_offset:
             return False
         
-        # Convert signed to unsigned
-        if offset < 0:
-            offset = offset + 65536
-        
         if not self.unlock_eprom(servo_id, 'sts'):
             return False
-        result = self.write_word(servo_id, type_class.offset_register, offset)
+        # Use sign-magnitude encoding for offset
+        result = self.write_word_signed(servo_id, type_class.offset_register, offset)
         self.lock_eprom(servo_id, 'sts')
         return result
     
@@ -938,9 +1062,8 @@ class FeetechServo:
             speed: Movement speed
             acc: Acceleration (0=max)
         """
-        # Handle signed position
-        if position < 0:
-            position = 0x10000 + position
+        # Handle signed position using sign-magnitude encoding (per official SDK)
+        position = self._to_sign_magnitude(position, 15)
         
         pos_l, pos_h = self._host2scs(position & 0xFFFF)
         speed_l, speed_h = self._host2scs(speed)
@@ -957,9 +1080,10 @@ class FeetechServo:
         Args:
             speed: Speed value (-32767 to 32767)
             acc: Acceleration
+        
+        Note: Uses sign-magnitude with bit 15 per official SDK
         """
-        if speed < 0:
-            speed = 0x10000 + speed
+        speed = self._to_sign_magnitude(speed, 15)
         
         speed_l, speed_h = self._host2scs(speed & 0xFFFF)
         data = bytes([acc, 0, 0, 0, 0, speed_l, speed_h])
@@ -987,13 +1111,137 @@ class FeetechServo:
         Write PWM output (-1000 to 1000)
         
         Requires PWM mode to be enabled first.
+        
+        Note: Uses sign-magnitude with bit 10 per official SDK
         """
-        if pwm < 0:
-            pwm = 0x10000 + pwm  # Two's complement for negative
+        pwm = self._to_sign_magnitude(pwm, 10)
         
         low, high = self._host2scs(pwm & 0xFFFF)
         self.serial.reset_input_buffer()
         self._write_buf(servo_id, SCSReg.GOAL_TIME_L, bytes([low, high]), Instruction.WRITE)
+        return self._ack(servo_id)
+    
+    # ========================================================================
+    # Step Mode (Multi-turn / Continuous Position Mode)
+    # ========================================================================
+    
+    def enable_step_mode(self, servo_id: int, speed: int = 300, acc: int = 50) -> bool:
+        """
+        Configure servo for step mode (Mode 3).
+        
+        In step mode, the goal position register becomes an INCREMENTAL delta:
+        - Each write moves the servo by that many steps
+        - Positive = one direction, negative = opposite direction
+        - Uses sign-magnitude encoding (bit 15 = direction)
+        
+        Per Feetech docs: "set the maximum angle and minimum angle to '0' 
+        and the operation mode to '3'"
+        
+        Args:
+            servo_id: Servo ID
+            speed: Movement speed (set once, applied to all steps)
+            acc: Acceleration value
+            
+        Returns:
+            True if successful
+        """
+        # Torque off for mode change
+        self.write_byte(servo_id, SCSReg.TORQUE_ENABLE, 0)
+        time.sleep(0.05)
+        
+        if not self.unlock_eprom(servo_id, 'sts'):
+            return False
+        
+        # Set mode 3 (step/multi-turn)
+        self.write_byte(servo_id, SCSReg.OPERATION_MODE, 3)
+        
+        # Limits MUST be 0,0 for step mode
+        self.write_word(servo_id, SCSReg.MIN_ANGLE_LIMIT_L, 0)
+        self.write_word(servo_id, SCSReg.MAX_ANGLE_LIMIT_L, 0)
+        
+        self.lock_eprom(servo_id, 'sts')
+        time.sleep(0.05)
+        
+        # Set speed (done before enabling torque)
+        self.write_word(servo_id, SCSReg.GOAL_SPEED_L, speed)
+        
+        # Set acceleration
+        self.write_byte(servo_id, SCSReg.ACC, acc)
+        
+        # Enable torque
+        self.write_byte(servo_id, SCSReg.TORQUE_ENABLE, 1)
+        time.sleep(0.1)
+        
+        return True
+    
+    def disable_step_mode(self, servo_id: int, min_limit: int = 0, max_limit: int = 4095) -> bool:
+        """
+        Return servo to normal position mode (Mode 0).
+        
+        Args:
+            servo_id: Servo ID
+            min_limit: Minimum angle limit (default 0)
+            max_limit: Maximum angle limit (default 4095)
+            
+        Returns:
+            True if successful
+        """
+        self.write_byte(servo_id, SCSReg.TORQUE_ENABLE, 0)
+        time.sleep(0.05)
+        
+        if not self.unlock_eprom(servo_id, 'sts'):
+            return False
+        
+        self.write_byte(servo_id, SCSReg.OPERATION_MODE, 0)
+        self.write_word(servo_id, SCSReg.MIN_ANGLE_LIMIT_L, min_limit)
+        self.write_word(servo_id, SCSReg.MAX_ANGLE_LIMIT_L, max_limit)
+        
+        self.lock_eprom(servo_id, 'sts')
+        time.sleep(0.05)
+        
+        self.write_byte(servo_id, SCSReg.TORQUE_ENABLE, 1)
+        return True
+    
+    def write_step(self, servo_id: int, steps: int) -> bool:
+        """
+        Move servo by a number of steps (step mode only).
+        
+        Args:
+            servo_id: Servo ID  
+            steps: Number of steps to move (positive or negative)
+                   Uses sign-magnitude encoding: bit 15 = direction
+                   
+        Returns:
+            True if successful
+            
+        Example:
+            servo.enable_step_mode(1, speed=300)
+            servo.write_step(1, 500)   # Move 500 steps forward
+            servo.write_step(1, 500)   # Move 500 more steps forward
+            servo.write_step(1, -1000) # Move 1000 steps backward
+        """
+        # Encode using sign-magnitude (bit 15 = sign)
+        encoded = self._to_sign_magnitude(steps, 15)
+        
+        low, high = self._host2scs(encoded)
+        self.serial.reset_input_buffer()
+        self._write_buf(servo_id, SCSReg.GOAL_POSITION_L, bytes([low, high]), Instruction.WRITE)
+        return self._ack(servo_id)
+    
+    def set_step_speed(self, servo_id: int, speed: int) -> bool:
+        """
+        Set movement speed for step mode.
+        
+        Args:
+            servo_id: Servo ID
+            speed: Speed value (typically 50-1000)
+            
+        Returns:
+            True if successful
+        """
+        low, high = self._host2scs(speed)
+        self.serial.reset_input_buffer()
+        self._write_buf(servo_id, SCSReg.GOAL_SPEED_L, bytes([low, high]), Instruction.WRITE)
         return self._ack(servo_id)
     
     # ========================================================================
@@ -1006,6 +1254,9 @@ class FeetechServo:
         
         Args:
             servos: List of (id, position, time_ms, speed) tuples
+        
+        Note: For STS/SMS servos, position can be negative (uses sign-magnitude encoding).
+              For SCS servos, positions are always unsigned.
         """
         if not servos:
             return
@@ -1022,6 +1273,12 @@ class FeetechServo:
         checksum = BROADCAST_ID + msg_len + Instruction.SYNC_WRITE + SCSReg.GOAL_POSITION_L + data_len
         
         for servo_id, position, time_ms, speed in servos:
+            # Apply sign-magnitude encoding for STS/SMS (little-endian)
+            if self.end == 0:  # Little-endian = STS/SMS
+                position = self._to_sign_magnitude(position, 15)
+            else:  # Big-endian = SCS (unsigned only)
+                position = max(0, position) & 0xFFFF
+            
             pos_l, pos_h = self._host2scs(position)
             time_l, time_h = self._host2scs(time_ms)
             speed_l, speed_h = self._host2scs(speed)

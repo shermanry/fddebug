@@ -1,0 +1,62 @@
+cd /Users/ryansherman/fddebug && python3 -c "
+from feetech_servo import FeetechServo, SCSReg, SMSReg
+import time
+
+port = '/dev/cu.usbmodem5AE60806871'
+servo_id = 3
+
+servo = FeetechServo()
+servo.open(port)
+servo.configure_for_type('sts')
+
+print('=== Step Mode with Sign-Magnitude ===')
+print()
+
+# Configure for step mode
+servo.write_byte(servo_id, 40, 0)
+servo.unlock_eprom(servo_id, 'sts')
+servo.write_byte(servo_id, 33, 3)
+servo.write_word(servo_id, 9, 0)
+servo.write_word(servo_id, 11, 0)
+servo.lock_eprom(servo_id, 'sts')
+time.sleep(0.1)
+
+servo.write_word(servo_id, 46, 300)  # Speed
+servo.write_byte(servo_id, 41, 50)   # Acceleration
+servo.write_byte(servo_id, 40, 1)    # Torque on
+time.sleep(0.3)
+
+def step_sign_magnitude(amount, wait=2):
+    '''Move by amount steps using SIGN-MAGNITUDE encoding'''
+    if amount < 0:
+        # Sign-magnitude: bit 15 = sign, bits 0-14 = magnitude
+        enc = (-amount) | 0x8000
+    else:
+        enc = amount
+    print(f'  Step {amount:+5d} → encoded as {enc} (0x{enc:04X})', end=' ', flush=True)
+    servo.write_word(servo_id, 42, enc)
+    time.sleep(wait)
+    print('done')
+
+print('Test with SIGN-MAGNITUDE encoding:')
+step_sign_magnitude(500)    # Forward 500
+step_sign_magnitude(500)    # Forward 500 more
+step_sign_magnitude(-500)   # Back 500 (should undo last move)
+step_sign_magnitude(-500)   # Back 500 (should undo first move)
+step_sign_magnitude(1000)   # Forward 1000
+step_sign_magnitude(-1000)  # Back 1000
+
+print()
+print('Did -500 correctly go back ~500 steps this time?')
+
+# Return to mode 0
+servo.write_byte(servo_id, 40, 0)
+servo.unlock_eprom(servo_id, 'sts')
+servo.write_byte(servo_id, 33, 0)
+servo.write_word(servo_id, 9, 0)
+servo.write_word(servo_id, 11, 4095)
+servo.lock_eprom(servo_id, 'sts')
+servo.write_byte(servo_id, 40, 1)
+print('Returned to Mode 0.')
+
+servo.close()

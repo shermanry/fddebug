@@ -359,6 +359,105 @@ HTML_TEMPLATE = '''
             border-color: #8855aa;
         }
         
+        /* Step Mode Controls */
+        .step-controls {
+            display: none;
+            background: linear-gradient(145deg, #1a2a3a 0%, #152030 100%);
+            border-radius: 10px;
+            padding: 12px;
+            margin-top: 10px;
+            border: 1px solid #2a4a6a;
+        }
+        .step-controls.active { display: block; }
+        
+        .step-label {
+            font-size: 11px;
+            color: #6ab0ff;
+            font-weight: 600;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .step-buttons {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 8px;
+        }
+        
+        .step-btn {
+            flex: 1;
+            padding: 10px 8px;
+            border: none;
+            border-radius: 8px;
+            font-weight: 700;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .step-btn.back {
+            background: linear-gradient(135deg, #ff6644 0%, #cc4422 100%);
+            color: white;
+        }
+        .step-btn.fwd {
+            background: linear-gradient(135deg, #44cc66 0%, #22aa44 100%);
+            color: white;
+        }
+        .step-btn:hover {
+            transform: scale(1.05);
+            filter: brightness(1.15);
+        }
+        .step-btn:active {
+            transform: scale(0.95);
+        }
+        
+        .step-size-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .step-size-label {
+            font-size: 11px;
+            color: #888;
+        }
+        
+        .step-size-input {
+            flex: 1;
+            padding: 6px 10px;
+            background: #1a2a3a;
+            border: 1px solid #3a5a7a;
+            border-radius: 6px;
+            color: #fff;
+            font-size: 13px;
+            text-align: center;
+        }
+        
+        .step-mode-toggle {
+            display: none;  /* Hidden by default, shown for STS servos */
+            width: 100%;
+            margin-top: 8px;
+            padding: 8px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 1px solid #3a5a7a;
+            background: #1a2a3a;
+            color: #6ab0ff;
+        }
+        .step-mode-toggle:hover {
+            background: #2a4a6a;
+            border-color: #4a7aaa;
+        }
+        .step-mode-toggle.active {
+            background: linear-gradient(135deg, #2266aa 0%, #1155aa 100%);
+            color: white;
+            border-color: #3388cc;
+        }
+        
         .footer {
             text-align: center;
             padding: 20px;
@@ -577,12 +676,12 @@ HTML_TEMPLATE = '''
                 
                 <div class="form-row">
                     <span class="form-label">Min Limit:</span>
-                    <input type="number" class="form-input" id="minLimit" min="0" max="4095" placeholder="0">
+                    <input type="number" class="form-input" id="minLimit" min="-32767" max="32767" placeholder="0">
                     <button class="primary" onclick="setMinLimit()">Set</button>
                 </div>
                 <div class="form-row">
                     <span class="form-label">Max Limit:</span>
-                    <input type="number" class="form-input" id="maxLimit" min="0" max="4095" placeholder="1023">
+                    <input type="number" class="form-input" id="maxLimit" min="-32767" max="32767" placeholder="4095">
                     <button class="primary" onclick="setMaxLimit()">Set</button>
                 </div>
             </div>
@@ -826,6 +925,18 @@ HTML_TEMPLATE = '''
                             <button class="quick-btn" onclick="gotoPos(${i}, 'max')">MAX</button>
                         </div>
                         <button class="torque-btn" id="torqueBtn${i}" onclick="toggleTorque(${i})">🔒 Torque ON</button>
+                        <button class="step-mode-toggle" id="stepToggle${i}" onclick="toggleStepMode(${i})">🔄 Step Mode</button>
+                        <div class="step-controls" id="stepControls${i}">
+                            <div class="step-label">⚡ Step Mode Active</div>
+                            <div class="step-buttons">
+                                <button class="step-btn back" onclick="doStep(${i}, -1)">◀ Back</button>
+                                <button class="step-btn fwd" onclick="doStep(${i}, 1)">Fwd ▶</button>
+                            </div>
+                            <div class="step-size-row">
+                                <span class="step-size-label">Steps:</span>
+                                <input type="number" class="step-size-input" id="stepSize${i}" value="500" min="1" max="10000">
+                            </div>
+                        </div>
                         <div class="status-row">
                             <div class="status-item">
                                 <div class="status-value" id="volt${i}">--</div>
@@ -958,6 +1069,15 @@ HTML_TEMPLATE = '''
                     btn.classList.remove('error');
                     updateCard(cardIdx, data);
                     servos[cardIdx] = {id: servoId, type: data.type || 'sts'};
+                    
+                    // Show step mode toggle only for STS servos
+                    const stepToggle = document.getElementById('stepToggle' + cardIdx);
+                    if (data.type === 'sts') {
+                        stepToggle.style.display = 'block';
+                    } else {
+                        stepToggle.style.display = 'none';
+                    }
+                    
                     startAutoRefresh();
                     setStatus('Connected to ' + typeLabel + ' servo ID ' + servoId);
                 } else {
@@ -1033,6 +1153,11 @@ HTML_TEMPLATE = '''
             // Update torque button
             if (data.torque !== undefined) {
                 updateTorqueBtn(idx, data.torque);
+            }
+            
+            // Update step mode UI based on current mode
+            if (data.mode !== undefined) {
+                updateStepModeUI(idx, data.mode);
             }
         }
         
@@ -1141,6 +1266,102 @@ HTML_TEMPLATE = '''
             } else {
                 btn.textContent = '🔓 Torque OFF';
                 btn.className = 'torque-btn off';
+            }
+        }
+        
+        // Step Mode Functions
+        let stepModes = {};  // Track step mode state per card
+        
+        async function toggleStepMode(cardIdx) {
+            const servo = servos[cardIdx];
+            if (!servo) return;
+            
+            const toggle = document.getElementById('stepToggle' + cardIdx);
+            const controls = document.getElementById('stepControls' + cardIdx);
+            const isActive = toggle.classList.contains('active');
+            const newState = !isActive;
+            
+            toggle.textContent = '...';
+            toggle.disabled = true;
+            
+            try {
+                const resp = await fetch('/api/servo/step_mode', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        id: servo.id, 
+                        enable: newState,
+                        speed: 300
+                    })
+                });
+                const data = await resp.json();
+                
+                if (data.success) {
+                    stepModes[cardIdx] = newState;
+                    if (newState) {
+                        toggle.classList.add('active');
+                        toggle.textContent = '✓ Step Mode ON';
+                        controls.classList.add('active');
+                        // Hide slider in step mode
+                        document.querySelector('#card' + cardIdx + ' .slider-container').style.display = 'none';
+                        document.querySelector('#card' + cardIdx + ' .quick-buttons').style.display = 'none';
+                    } else {
+                        toggle.classList.remove('active');
+                        toggle.textContent = '🔄 Step Mode';
+                        controls.classList.remove('active');
+                        // Show slider in normal mode
+                        document.querySelector('#card' + cardIdx + ' .slider-container').style.display = 'block';
+                        document.querySelector('#card' + cardIdx + ' .quick-buttons').style.display = 'flex';
+                    }
+                } else {
+                    alert('Failed to toggle step mode: ' + (data.error || 'Unknown error'));
+                    toggle.textContent = isActive ? '✓ Step Mode ON' : '🔄 Step Mode';
+                }
+            } catch (e) {
+                toggle.textContent = isActive ? '✓ Step Mode ON' : '🔄 Step Mode';
+            }
+            
+            toggle.disabled = false;
+        }
+        
+        async function doStep(cardIdx, direction) {
+            const servo = servos[cardIdx];
+            if (!servo) return;
+            
+            const stepSize = parseInt(document.getElementById('stepSize' + cardIdx).value) || 500;
+            const steps = stepSize * direction;
+            
+            try {
+                await fetch('/api/servo/step', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({id: servo.id, steps: steps})
+                });
+            } catch (e) {
+                console.error('Step error:', e);
+            }
+        }
+        
+        function updateStepModeUI(cardIdx, mode) {
+            // Mode 3 = step mode
+            const isStepMode = mode === 3;
+            const toggle = document.getElementById('stepToggle' + cardIdx);
+            const controls = document.getElementById('stepControls' + cardIdx);
+            
+            stepModes[cardIdx] = isStepMode;
+            
+            if (isStepMode) {
+                toggle.classList.add('active');
+                toggle.textContent = '✓ Step Mode ON';
+                controls.classList.add('active');
+                document.querySelector('#card' + cardIdx + ' .slider-container').style.display = 'none';
+                document.querySelector('#card' + cardIdx + ' .quick-buttons').style.display = 'none';
+            } else {
+                toggle.classList.remove('active');
+                toggle.textContent = '🔄 Step Mode';
+                controls.classList.remove('active');
+                document.querySelector('#card' + cardIdx + ' .slider-container').style.display = 'block';
+                document.querySelector('#card' + cardIdx + ' .quick-buttons').style.display = 'flex';
             }
         }
         
@@ -1694,7 +1915,7 @@ def scan():
     found = []
     with lock:
         if controller['servo']:
-            for sid in range(1, 21):
+            for sid in range(1, 31):  # Scan IDs 1-30
                 try:
                     if controller['servo'].ping(sid) >= 0:
                         found.append(sid)
@@ -1814,6 +2035,12 @@ def servo_status():
             load = servo.read_load(servo_id)
             torque = servo.read_byte(servo_id, SCSReg.TORQUE_ENABLE)
             
+            # Read mode for step mode detection
+            if type_class.supports_mode:
+                mode = servo.read_byte(servo_id, type_class.mode_register)
+            else:
+                mode = 0
+            
             return jsonify({
                 'success': True,
                 'position': pos,
@@ -1822,7 +2049,8 @@ def servo_status():
                 'voltage': voltage if voltage >= 0 else None,
                 'temp': temp if temp >= 0 else None,
                 'load': load if load >= 0 else None,
-                'torque': torque == 1
+                'torque': torque == 1,
+                'mode': mode if mode >= 0 else 0
             })
         except:
             return jsonify({'success': False})
@@ -1982,13 +2210,21 @@ def servo_program():
             
             elif action == 'set_min_limit':
                 servo.unlock_eprom(servo_id, servo_type)
-                servo.write_word(servo_id, SCSReg.MIN_ANGLE_LIMIT_L, value)
+                # STS/SMS uses sign-magnitude for signed limits, SCS is unsigned
+                if type_class.supports_multi_turn:
+                    servo.write_word_signed(servo_id, SCSReg.MIN_ANGLE_LIMIT_L, value)
+                else:
+                    servo.write_word(servo_id, SCSReg.MIN_ANGLE_LIMIT_L, max(0, value))
                 servo.lock_eprom(servo_id, servo_type)
                 return jsonify({'success': True})
             
             elif action == 'set_max_limit':
                 servo.unlock_eprom(servo_id, servo_type)
-                servo.write_word(servo_id, SCSReg.MAX_ANGLE_LIMIT_L, value)
+                # STS/SMS uses sign-magnitude for signed limits, SCS is unsigned
+                if type_class.supports_multi_turn:
+                    servo.write_word_signed(servo_id, SCSReg.MAX_ANGLE_LIMIT_L, value)
+                else:
+                    servo.write_word(servo_id, SCSReg.MAX_ANGLE_LIMIT_L, max(0, value))
                 servo.lock_eprom(servo_id, servo_type)
                 return jsonify({'success': True})
             
@@ -2124,6 +2360,71 @@ def servo_program():
                 
         except Exception as e:
             return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/servo/step', methods=['POST'])
+def servo_step():
+    """Move servo by a number of steps (step mode only)"""
+    data = request.json
+    servo_id = data.get('id')
+    steps = data.get('steps', 0)
+    
+    with lock:
+        if controller['servo']:
+            try:
+                servo = controller['servo']
+                servo_type = controller['servo_types'].get(servo_id, 'sts')
+                servo.configure_for_type(servo_type)
+                
+                servo.write_step(servo_id, steps)
+                return jsonify({'success': True})
+            except Exception as e:
+                return jsonify({'success': False, 'error': str(e)})
+    return jsonify({'success': False, 'error': 'Not connected'})
+
+@app.route('/api/servo/step_mode', methods=['POST'])
+def servo_step_mode():
+    """Enable or disable step mode"""
+    data = request.json
+    servo_id = data.get('id')
+    enable = data.get('enable', True)
+    speed = data.get('speed', 300)
+    
+    with lock:
+        if controller['servo']:
+            try:
+                servo = controller['servo']
+                servo_type = controller['servo_types'].get(servo_id, 'sts')
+                servo.configure_for_type(servo_type)
+                
+                if enable:
+                    servo.enable_step_mode(servo_id, speed=speed, acc=50)
+                else:
+                    servo.disable_step_mode(servo_id)
+                
+                return jsonify({'success': True})
+            except Exception as e:
+                return jsonify({'success': False, 'error': str(e)})
+    return jsonify({'success': False, 'error': 'Not connected'})
+
+@app.route('/api/servo/step_speed', methods=['POST'])
+def servo_step_speed():
+    """Set step mode speed"""
+    data = request.json
+    servo_id = data.get('id')
+    speed = data.get('speed', 300)
+    
+    with lock:
+        if controller['servo']:
+            try:
+                servo = controller['servo']
+                servo_type = controller['servo_types'].get(servo_id, 'sts')
+                servo.configure_for_type(servo_type)
+                
+                servo.set_step_speed(servo_id, speed)
+                return jsonify({'success': True})
+            except Exception as e:
+                return jsonify({'success': False, 'error': str(e)})
+    return jsonify({'success': False, 'error': 'Not connected'})
 
 @app.route('/api/stop', methods=['POST'])
 def stop_all():
