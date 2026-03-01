@@ -2092,12 +2092,10 @@ def servo_settings():
             else:
                 mode = 0  # Default to position mode
             
-            # Read offset if supported
+            # Read offset if supported (uses sign-magnitude encoding)
             if type_class.supports_offset:
                 try:
-                    offset = servo.read_word(servo_id, type_class.offset_register)
-                    if offset > 32767:
-                        offset = offset - 65536
+                    offset = servo.read_word_signed(servo_id, type_class.offset_register)
                 except:
                     offset = 0
             else:
