@@ -6,8 +6,10 @@ Beautiful dark theme with programming features
 
 from flask import Flask, render_template_string, jsonify, request
 import serial.tools.list_ports
-from feetech_servo import FeetechServo, SCSReg, SMSReg, BaudRate, get_servo_type, SCSType, STSType
+from feetech_servo import FeetechServo, BaudRate, get_servo_type, SCSType, STSType
 import threading
+import time
+from collections import defaultdict
 
 app = Flask(__name__)
 
@@ -19,6 +21,31 @@ controller = {
     'servo_types': {}  # servo_id -> 'scs' or 'sts'
 }
 lock = threading.Lock()
+
+# Step queue to prevent drift when spamming commands
+step_queues = defaultdict(list)
+
+def process_step_queues():
+    while True:
+        time.sleep(0.05)
+        with lock:
+            if not controller['servo']: continue
+            for servo_id, queue in list(step_queues.items()):
+                if not queue: continue
+                
+                try:
+                    servo = controller['servo']
+                    servo.configure_for_type(controller['servo_types'].get(servo_id, 'sts'))
+                    # Check if currently moving
+                    if not servo.is_moving(servo_id):
+                        steps = sum(queue)
+                        queue.clear()
+                        if steps != 0:
+                            servo.write_step(servo_id, steps)
+                except Exception:
+                    pass
+
+threading.Thread(target=process_step_queues, daemon=True).start()
 
 def detect_servo_type(servo, servo_id):
     """Detect if servo is SCS or STS using the library's detect_type method"""
@@ -610,6 +637,7 @@ HTML_TEMPLATE = '''
             <button onclick="scanAll()">🔍 Scan All</button>
             <button onclick="refreshAll()">📊 Refresh</button>
             <button class="danger" onclick="stopAll()">⏹ STOP ALL</button>
+            <button onclick="showAllLimits()">📏 Show Limits</button>
         </div>
         <div class="toolbar-group" style="margin-left: auto;">
             <span style="color: #666; padding: 8px;">Sync:</span>
@@ -730,7 +758,7 @@ HTML_TEMPLATE = '''
                 
                 <div class="form-row">
                     <span class="form-label">Offset:</span>
-                    <input type="number" class="form-input" id="offset" min="-128" max="127" placeholder="0">
+                    <input type="number" class="form-input" id="offset" min="0" max="4095" placeholder="0">
                     <button class="primary" onclick="setOffset()">Set</button>
                 </div>
             </div>
@@ -898,12 +926,15 @@ HTML_TEMPLATE = '''
                 grid.innerHTML += `
                     <div class="card" id="card${i}">
                         <div class="card-header">
-                            <span class="card-title">Servo ${i + 1}</span>
+                            <span class="card-title" id="cardTitle${i}">ID ${i + 1}</span>
                             <div class="card-status"></div>
                         </div>
-                        <div class="id-row">
+                        <div class="id-row" style="display: none;">
                             <input type="number" class="id-input" id="id${i}" value="${i + 1}" min="1" max="253">
-                            <button class="connect-btn" id="connectBtn${i}" onclick="connectServo(${i})">Connect</button>
+                        </div>
+                        <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+                            <button class="connect-btn" id="connectBtn${i}" onclick="connectServo(${i})" style="flex: 1;">Connect ID ${i + 1}</button>
+                            <button class="program-btn" onclick="openProgram(${i})" style="width: auto; padding: 8px; margin: 0;">⚙️</button>
                         </div>
                         <div class="position-display">
                             <input type="number" class="position-input" id="pos${i}" value="0" 
@@ -919,10 +950,19 @@ HTML_TEMPLATE = '''
                             <input type="range" class="slider" id="slider${i}" min="0" max="1023" value="512"
                                    oninput="onSlider(${i}, this.value)">
                         </div>
-                        <div class="quick-buttons">
+                        <div class="quick-buttons" id="quickBtns${i}">
                             <button class="quick-btn" onclick="gotoPos(${i}, 'min')">MIN</button>
                             <button class="quick-btn" onclick="gotoPos(${i}, 'mid')">MID</button>
                             <button class="quick-btn" onclick="gotoPos(${i}, 'max')">MAX</button>
+                        </div>
+                        <div class="reg-step-controls" id="regStepControls${i}" style="margin-top: 10px;">
+                            <div class="step-buttons">
+                                <button class="step-btn back" onclick="doRegStep(${i}, -1)">◀ Step</button>
+                                <div class="step-size-row" style="flex: 1; display: flex; justify-content: center; margin: 0 4px;">
+                                    <input type="number" class="step-size-input" id="regStepSize${i}" value="10" min="1" max="4095" style="width: 100%; font-size: 11px;">
+                                </div>
+                                <button class="step-btn fwd" onclick="doRegStep(${i}, 1)">Step ▶</button>
+                            </div>
                         </div>
                         <button class="torque-btn" id="torqueBtn${i}" onclick="toggleTorque(${i})">🔒 Torque ON</button>
                         <button class="step-mode-toggle" id="stepToggle${i}" onclick="toggleStepMode(${i})">🔄 Step Mode</button>
@@ -962,14 +1002,22 @@ HTML_TEMPLATE = '''
         }
         
         async function loadPorts() {
-            const resp = await fetch('/api/ports');
-            const data = await resp.json();
-            const select = document.getElementById('portSelect');
-            select.innerHTML = '<option value="">Select Port...</option>';
-            data.ports.forEach(port => {
-                select.innerHTML += `<option value="${port}">${port}</option>`;
-            });
-            if (data.ports.length > 0) select.value = data.ports[0];
+            try {
+                const resp = await fetch('/api/ports?' + new Date().getTime());
+                const data = await resp.json();
+                console.log("Loaded ports:", data);
+                const select = document.getElementById('portSelect');
+                select.innerHTML = '<option value="">Select Port...</option>';
+                if (data.ports && data.ports.length > 0) {
+                    data.ports.forEach(port => {
+                        select.innerHTML += `<option value="${port}">${port}</option>`;
+                    });
+                    select.value = data.ports[0];
+                }
+            } catch (e) {
+                console.error("Failed to load ports:", e);
+                alert("Failed to load ports from server. Is it running?");
+            }
         }
         
         async function toggleConnect() {
@@ -995,8 +1043,12 @@ HTML_TEMPLATE = '''
                     document.getElementById('load' + i).textContent = '--';
                     // Reset connect buttons
                     const connBtn = document.getElementById('connectBtn' + i);
-                    connBtn.textContent = 'Connect';
+                    const idInput = document.getElementById('id' + i).value;
+                    connBtn.textContent = `Connect ID ${idInput}`;
                     connBtn.classList.remove('success', 'error');
+                    
+                    // Reset card title
+                    document.getElementById('cardTitle' + i).textContent = `ID ${idInput}`;
                 }
             } else {
                 const port = document.getElementById('portSelect').value;
@@ -1020,6 +1072,51 @@ HTML_TEMPLATE = '''
                     setStatus('Connection failed: ' + data.error);
                     alert('Failed to connect: ' + data.error);
                 }
+            }
+        }
+        function showAllLimits() {
+            if (!connected) {
+                alert("Not connected to any servos.");
+                return;
+            }
+            let msg = "Connected Servos Position Limits:\\n\\n";
+            let found = false;
+            for (let i = 0; i < 16; i++) {
+                if (servos[i]) {
+                    const min = document.getElementById('slider' + i).min;
+                    const max = document.getElementById('slider' + i).max;
+                    const typeLabel = servos[i].type === 'sts' ? 'STS' : 'SCS';
+                    msg += `ID ${servos[i].id} (${typeLabel}): Min ${min}, Max ${max}\\n`;
+                    found = true;
+                }
+            }
+            if (!found) {
+                msg = "No servos are currently connected.";
+                alert(msg);
+                return;
+            }
+            
+            // Try to copy to clipboard
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(msg).then(() => {
+                    alert(msg + "\\n\\n(Copied to clipboard!)");
+                }).catch(err => {
+                    alert(msg);
+                });
+            } else {
+                // Fallback for non-secure contexts (like localhost without https)
+                const textArea = document.createElement("textarea");
+                textArea.value = msg;
+                document.body.appendChild(textArea);
+                textArea.focus();
+                textArea.select();
+                try {
+                    document.execCommand('copy');
+                    alert(msg + "\\n\\n(Copied to clipboard!)");
+                } catch (err) {
+                    alert(msg);
+                }
+                document.body.removeChild(textArea);
             }
         }
         
@@ -1061,10 +1158,14 @@ HTML_TEMPLATE = '''
                 const data = await resp.json();
                 
                 if (data.success) {
-                    // Success - show checkmark with type
+                    // Success - update card title to just ID and type
                     document.getElementById('card' + cardIdx).classList.add('connected');
                     const typeLabel = data.type === 'sts' ? 'STS' : 'SCS';
-                    btn.textContent = '✓ ' + typeLabel + ' #' + servoId;
+                    
+                    // Update the card header to show the true ID
+                    document.getElementById('cardTitle' + cardIdx).textContent = `ID ${servoId} (${typeLabel})`;
+                    
+                    btn.textContent = '✓ Connected';
                     btn.classList.add('success');
                     btn.classList.remove('error');
                     updateCard(cardIdx, data);
@@ -1091,7 +1192,7 @@ HTML_TEMPLATE = '''
                     
                     // Reset button after 2 seconds
                     setTimeout(() => {
-                        btn.textContent = 'Connect';
+                        btn.textContent = `Connect ID ${servoId}`;
                         btn.classList.remove('error');
                     }, 2000);
                 }
@@ -1100,7 +1201,8 @@ HTML_TEMPLATE = '''
                 btn.classList.add('error');
                 setStatus('Connection error: ' + e.message);
                 setTimeout(() => {
-                    btn.textContent = 'Connect';
+                    const idInput = document.getElementById('id' + cardIdx).value;
+                    btn.textContent = `Connect ID ${idInput}`;
                     btn.classList.remove('error');
                 }, 2000);
             }
@@ -1304,14 +1406,16 @@ HTML_TEMPLATE = '''
                         controls.classList.add('active');
                         // Hide slider in step mode
                         document.querySelector('#card' + cardIdx + ' .slider-container').style.display = 'none';
-                        document.querySelector('#card' + cardIdx + ' .quick-buttons').style.display = 'none';
+                        document.getElementById('quickBtns' + cardIdx).style.display = 'none';
+                        document.getElementById('regStepControls' + cardIdx).style.display = 'none';
                     } else {
                         toggle.classList.remove('active');
                         toggle.textContent = '🔄 Step Mode';
                         controls.classList.remove('active');
                         // Show slider in normal mode
                         document.querySelector('#card' + cardIdx + ' .slider-container').style.display = 'block';
-                        document.querySelector('#card' + cardIdx + ' .quick-buttons').style.display = 'flex';
+                        document.getElementById('quickBtns' + cardIdx).style.display = 'flex';
+                        document.getElementById('regStepControls' + cardIdx).style.display = 'block';
                     }
                 } else {
                     alert('Failed to toggle step mode: ' + (data.error || 'Unknown error'));
@@ -1342,6 +1446,36 @@ HTML_TEMPLATE = '''
             }
         }
         
+        async function doRegStep(cardIdx, direction) {
+            const servo = servos[cardIdx];
+            if (!servo) return;
+            
+            const stepSize = parseInt(document.getElementById('regStepSize' + cardIdx).value) || 10;
+            const posInput = document.getElementById('pos' + cardIdx);
+            const slider = document.getElementById('slider' + cardIdx);
+            
+            let currentPos = parseInt(posInput.value) || 0;
+            let newPos = currentPos + (stepSize * direction);
+            
+            const min = parseInt(slider.min);
+            const max = parseInt(slider.max);
+            
+            newPos = Math.max(min, Math.min(max, newPos));
+            
+            posInput.value = newPos;
+            slider.value = newPos;
+            
+            try {
+                await fetch('/api/servo/position', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({id: servo.id, position: newPos})
+                });
+            } catch (e) {
+                console.error('Position error:', e);
+            }
+        }
+        
         function updateStepModeUI(cardIdx, mode) {
             // Mode 3 = step mode
             const isStepMode = mode === 3;
@@ -1350,18 +1484,20 @@ HTML_TEMPLATE = '''
             
             stepModes[cardIdx] = isStepMode;
             
-            if (isStepMode) {
+                if (isStepMode) {
                 toggle.classList.add('active');
                 toggle.textContent = '✓ Step Mode ON';
                 controls.classList.add('active');
                 document.querySelector('#card' + cardIdx + ' .slider-container').style.display = 'none';
-                document.querySelector('#card' + cardIdx + ' .quick-buttons').style.display = 'none';
+                document.getElementById('quickBtns' + cardIdx).style.display = 'none';
+                document.getElementById('regStepControls' + cardIdx).style.display = 'none';
             } else {
                 toggle.classList.remove('active');
                 toggle.textContent = '🔄 Step Mode';
                 controls.classList.remove('active');
                 document.querySelector('#card' + cardIdx + ' .slider-container').style.display = 'block';
-                document.querySelector('#card' + cardIdx + ' .quick-buttons').style.display = 'flex';
+                document.getElementById('quickBtns' + cardIdx).style.display = 'flex';
+                document.getElementById('regStepControls' + cardIdx).style.display = 'block';
             }
         }
         
@@ -1958,19 +2094,19 @@ def servo_connect():
             # Read position based on type capabilities
             if type_class.supports_multi_turn:
                 pos = servo.read_position_signed(servo_id)
-                min_pos = servo.read_word_signed(servo_id, SCSReg.MIN_ANGLE_LIMIT_L)
-                max_pos = servo.read_word_signed(servo_id, SCSReg.MAX_ANGLE_LIMIT_L)
+                min_pos = servo.read_register(servo_id, 9)
+                max_pos = servo.read_register(servo_id, 11)
             else:
                 pos = servo.read_position(servo_id)
-                min_pos = servo.read_word(servo_id, SCSReg.MIN_ANGLE_LIMIT_L)
-                max_pos = servo.read_word(servo_id, SCSReg.MAX_ANGLE_LIMIT_L)
+                min_pos = servo.read_register(servo_id, 9)
+                max_pos = servo.read_register(servo_id, 11)
                 if max_pos <= 0:
                     max_pos = type_class.max_position
             
             voltage = servo.read_voltage(servo_id)
             temp = servo.read_temperature(servo_id)
             load = servo.read_load(servo_id)
-            torque = servo.read_byte(servo_id, SCSReg.TORQUE_ENABLE)
+            torque = servo.read_register(servo_id, 40)
             
             controller['connected_servos'][card_idx] = servo_id
             
@@ -2028,23 +2164,23 @@ def servo_status():
             # Read position based on type capabilities
             if type_class.supports_multi_turn:
                 pos = servo.read_position_signed(servo_id)
-                min_pos = servo.read_word_signed(servo_id, SCSReg.MIN_ANGLE_LIMIT_L)
-                max_pos = servo.read_word_signed(servo_id, SCSReg.MAX_ANGLE_LIMIT_L)
+                min_pos = servo.read_register(servo_id, 9)
+                max_pos = servo.read_register(servo_id, 11)
             else:
                 pos = servo.read_position(servo_id)
-                min_pos = servo.read_word(servo_id, SCSReg.MIN_ANGLE_LIMIT_L)
-                max_pos = servo.read_word(servo_id, SCSReg.MAX_ANGLE_LIMIT_L)
+                min_pos = servo.read_register(servo_id, 9)
+                max_pos = servo.read_register(servo_id, 11)
                 if max_pos <= 0:
                     max_pos = type_class.max_position
             
             voltage = servo.read_voltage(servo_id)
             temp = servo.read_temperature(servo_id)
             load = servo.read_load(servo_id)
-            torque = servo.read_byte(servo_id, SCSReg.TORQUE_ENABLE)
+            torque = servo.read_register(servo_id, 40)
             
             # Read mode for step mode detection
             if type_class.supports_mode:
-                mode = servo.read_byte(servo_id, type_class.mode_register)
+                mode = servo.read_register(servo_id, type_class.mode_register)
             else:
                 mode = 0
             
@@ -2079,58 +2215,58 @@ def servo_settings():
             type_class = get_servo_type(servo_type)
             
             # Common registers
-            baud = servo.read_byte(servo_id, SCSReg.BAUD_RATE)
-            cw_dead = servo.read_byte(servo_id, SCSReg.CW_DEAD)
-            ccw_dead = servo.read_byte(servo_id, SCSReg.CCW_DEAD)
+            baud = servo.read_register(servo_id, 6)
+            cw_dead = servo.read_register(servo_id, 26)
+            ccw_dead = servo.read_register(servo_id, 27)
             
             # Read limits based on type capabilities
             if type_class.supports_multi_turn:
-                min_limit = servo.read_word_signed(servo_id, SCSReg.MIN_ANGLE_LIMIT_L)
-                max_limit = servo.read_word_signed(servo_id, SCSReg.MAX_ANGLE_LIMIT_L)
+                min_limit = servo.read_register(servo_id, 9)
+                max_limit = servo.read_register(servo_id, 11)
             else:
-                min_limit = servo.read_word(servo_id, SCSReg.MIN_ANGLE_LIMIT_L)
-                max_limit = servo.read_word(servo_id, SCSReg.MAX_ANGLE_LIMIT_L)
+                min_limit = servo.read_register(servo_id, 9)
+                max_limit = servo.read_register(servo_id, 11)
                 if max_limit <= 0:
                     max_limit = type_class.max_position
             
             # Read mode if supported
             if type_class.supports_mode:
-                mode = servo.read_byte(servo_id, type_class.mode_register)
+                mode = servo.read_register(servo_id, type_class.mode_register)
             else:
                 mode = 0  # Default to position mode
             
             # Read offset if supported (uses sign-magnitude encoding)
             if type_class.supports_offset:
                 try:
-                    offset = servo.read_word_signed(servo_id, type_class.offset_register)
+                    offset = servo.read_register(servo_id, type_class.offset_register)
                 except:
                     offset = 0
             else:
                 offset = 0
             
             # Read torque status
-            torque = servo.read_byte(servo_id, SCSReg.TORQUE_ENABLE)
+            torque = servo.read_register(servo_id, 40)
             
             # Read all EPROM settings
-            pid_p = servo.read_byte(servo_id, SCSReg.P_COEFFICIENT)
-            pid_i = servo.read_byte(servo_id, SCSReg.I_COEFFICIENT)
-            pid_d = servo.read_byte(servo_id, SCSReg.D_COEFFICIENT)
-            punch = servo.read_word(servo_id, SCSReg.PUNCH_L)
-            max_torque = servo.read_word(servo_id, SCSReg.MAX_TORQUE_L)
-            max_temp = servo.read_byte(servo_id, SCSReg.MAX_TEMP)
-            min_voltage = servo.read_byte(servo_id, SCSReg.MIN_VOLTAGE)
-            max_voltage = servo.read_byte(servo_id, SCSReg.MAX_VOLTAGE)
-            protection_torque = servo.read_byte(servo_id, SCSReg.PROTECTION_TORQUE)
-            protection_time = servo.read_byte(servo_id, SCSReg.PROTECTION_TIME)
-            protection_current = servo.read_word(servo_id, SCSReg.PROTECTION_CURRENT_L)
-            led_alarm = servo.read_byte(servo_id, SCSReg.LED_ALARM_CONDITION)
-            unloading = servo.read_byte(servo_id, SCSReg.UNLOADING_CONDITION)
+            pid_p = servo.read_register(servo_id, 21)
+            pid_i = servo.read_register(servo_id, 22)
+            pid_d = servo.read_register(servo_id, 23)
+            punch = servo.read_register(servo_id, 24)
+            max_torque = servo.read_register(servo_id, 16)
+            max_temp = servo.read_register(servo_id, 13)
+            min_voltage = servo.read_register(servo_id, 15)
+            max_voltage = servo.read_register(servo_id, 14)
+            protection_torque = servo.read_register(servo_id, 34)
+            protection_time = servo.read_register(servo_id, 35)
+            protection_current = servo.read_register(servo_id, 28)
+            led_alarm = servo.read_register(servo_id, 20)
+            unloading = servo.read_register(servo_id, 19)
             
             # STS-specific speed loop
             if type_class.supports_acceleration:
-                speed_p = servo.read_byte(servo_id, SCSReg.SPEED_CLOSED_LOOP_P)
-                speed_i = servo.read_byte(servo_id, SCSReg.VELOCITY_I)
-                acceleration = servo.read_byte(servo_id, SMSReg.ACC)
+                speed_p = servo.read_register(servo_id, 37)
+                speed_i = servo.read_register(servo_id, 39)
+                acceleration = servo.read_register(servo_id, 41)
             else:
                 speed_p = 0
                 speed_i = 0
@@ -2209,7 +2345,7 @@ def servo_program():
                 if not type_class.supports_mode:
                     return jsonify({'success': False, 'error': f'{type_class.name.upper()} servos do not support mode change'})
                 servo.unlock_eprom(servo_id, servo_type)
-                servo.write_byte(servo_id, type_class.mode_register, value)
+                servo.write_register(servo_id, type_class.mode_register, value)
                 servo.lock_eprom(servo_id, servo_type)
                 return jsonify({'success': True})
             
@@ -2217,9 +2353,9 @@ def servo_program():
                 servo.unlock_eprom(servo_id, servo_type)
                 # STS/SMS uses sign-magnitude for signed limits, SCS is unsigned
                 if type_class.supports_multi_turn:
-                    servo.write_word_signed(servo_id, SCSReg.MIN_ANGLE_LIMIT_L, value)
+                    servo.write_register(servo_id, 9, value)
                 else:
-                    servo.write_word(servo_id, SCSReg.MIN_ANGLE_LIMIT_L, max(0, value))
+                    servo.write_register(servo_id, 9, max(0, value))
                 servo.lock_eprom(servo_id, servo_type)
                 return jsonify({'success': True})
             
@@ -2227,9 +2363,9 @@ def servo_program():
                 servo.unlock_eprom(servo_id, servo_type)
                 # STS/SMS uses sign-magnitude for signed limits, SCS is unsigned
                 if type_class.supports_multi_turn:
-                    servo.write_word_signed(servo_id, SCSReg.MAX_ANGLE_LIMIT_L, value)
+                    servo.write_register(servo_id, 11, value)
                 else:
-                    servo.write_word(servo_id, SCSReg.MAX_ANGLE_LIMIT_L, max(0, value))
+                    servo.write_register(servo_id, 11, max(0, value))
                 servo.lock_eprom(servo_id, servo_type)
                 return jsonify({'success': True})
             
@@ -2239,13 +2375,13 @@ def servo_program():
             
             elif action == 'set_cw_dead':
                 servo.unlock_eprom(servo_id, servo_type)
-                servo.write_byte(servo_id, SCSReg.CW_DEAD, value)
+                servo.write_register(servo_id, 26, value)
                 servo.lock_eprom(servo_id, servo_type)
                 return jsonify({'success': True})
             
             elif action == 'set_ccw_dead':
                 servo.unlock_eprom(servo_id, servo_type)
-                servo.write_byte(servo_id, SCSReg.CCW_DEAD, value)
+                servo.write_register(servo_id, 27, value)
                 servo.lock_eprom(servo_id, servo_type)
                 return jsonify({'success': True})
             
@@ -2262,102 +2398,102 @@ def servo_program():
             # PID Settings
             elif action == 'pid_p':
                 servo.unlock_eprom(servo_id, servo_type)
-                servo.write_byte(servo_id, SCSReg.P_COEFFICIENT, value)
+                servo.write_register(servo_id, 21, value)
                 servo.lock_eprom(servo_id, servo_type)
                 return jsonify({'success': True})
             
             elif action == 'pid_i':
                 servo.unlock_eprom(servo_id, servo_type)
-                servo.write_byte(servo_id, SCSReg.I_COEFFICIENT, value)
+                servo.write_register(servo_id, 22, value)
                 servo.lock_eprom(servo_id, servo_type)
                 return jsonify({'success': True})
             
             elif action == 'pid_d':
                 servo.unlock_eprom(servo_id, servo_type)
-                servo.write_byte(servo_id, SCSReg.D_COEFFICIENT, value)
+                servo.write_register(servo_id, 23, value)
                 servo.lock_eprom(servo_id, servo_type)
                 return jsonify({'success': True})
             
             # Punch & Torque
             elif action == 'punch':
                 servo.unlock_eprom(servo_id, servo_type)
-                servo.write_word(servo_id, SCSReg.PUNCH_L, value)
+                servo.write_register(servo_id, 24, value)
                 servo.lock_eprom(servo_id, servo_type)
                 return jsonify({'success': True})
             
             elif action == 'max_torque':
                 servo.unlock_eprom(servo_id, servo_type)
-                servo.write_word(servo_id, SCSReg.MAX_TORQUE_L, value)
+                servo.write_register(servo_id, 16, value)
                 servo.lock_eprom(servo_id, servo_type)
                 return jsonify({'success': True})
             
             # Protection Limits
             elif action == 'max_temp':
                 servo.unlock_eprom(servo_id, servo_type)
-                servo.write_byte(servo_id, SCSReg.MAX_TEMP, value)
+                servo.write_register(servo_id, 13, value)
                 servo.lock_eprom(servo_id, servo_type)
                 return jsonify({'success': True})
             
             elif action == 'min_voltage':
                 servo.unlock_eprom(servo_id, servo_type)
-                servo.write_byte(servo_id, SCSReg.MIN_VOLTAGE, value)
+                servo.write_register(servo_id, 15, value)
                 servo.lock_eprom(servo_id, servo_type)
                 return jsonify({'success': True})
             
             elif action == 'max_voltage':
                 servo.unlock_eprom(servo_id, servo_type)
-                servo.write_byte(servo_id, SCSReg.MAX_VOLTAGE, value)
+                servo.write_register(servo_id, 14, value)
                 servo.lock_eprom(servo_id, servo_type)
                 return jsonify({'success': True})
             
             # Overload Protection
             elif action == 'protection_torque':
                 servo.unlock_eprom(servo_id, servo_type)
-                servo.write_byte(servo_id, SCSReg.PROTECTION_TORQUE, value)
+                servo.write_register(servo_id, 34, value)
                 servo.lock_eprom(servo_id, servo_type)
                 return jsonify({'success': True})
             
             elif action == 'protection_time':
                 servo.unlock_eprom(servo_id, servo_type)
-                servo.write_byte(servo_id, SCSReg.PROTECTION_TIME, value)
+                servo.write_register(servo_id, 35, value)
                 servo.lock_eprom(servo_id, servo_type)
                 return jsonify({'success': True})
             
             elif action == 'protection_current':
                 servo.unlock_eprom(servo_id, servo_type)
-                servo.write_word(servo_id, SCSReg.PROTECTION_CURRENT_L, value)
+                servo.write_register(servo_id, 28, value)
                 servo.lock_eprom(servo_id, servo_type)
                 return jsonify({'success': True})
             
             # LED & Alarms
             elif action == 'led_alarm':
                 servo.unlock_eprom(servo_id, servo_type)
-                servo.write_byte(servo_id, SCSReg.LED_ALARM_CONDITION, value)
+                servo.write_register(servo_id, 20, value)
                 servo.lock_eprom(servo_id, servo_type)
                 return jsonify({'success': True})
             
             elif action == 'unloading':
                 servo.unlock_eprom(servo_id, servo_type)
-                servo.write_byte(servo_id, SCSReg.UNLOADING_CONDITION, value)
+                servo.write_register(servo_id, 19, value)
                 servo.lock_eprom(servo_id, servo_type)
                 return jsonify({'success': True})
             
             # Speed Loop (STS only)
             elif action == 'speed_p':
                 servo.unlock_eprom(servo_id, servo_type)
-                servo.write_byte(servo_id, SCSReg.SPEED_CLOSED_LOOP_P, value)
+                servo.write_register(servo_id, 37, value)
                 servo.lock_eprom(servo_id, servo_type)
                 return jsonify({'success': True})
             
             elif action == 'speed_i':
                 servo.unlock_eprom(servo_id, servo_type)
-                servo.write_byte(servo_id, SCSReg.VELOCITY_I, value)
+                servo.write_register(servo_id, 39, value)
                 servo.lock_eprom(servo_id, servo_type)
                 return jsonify({'success': True})
             
             elif action == 'acceleration':
                 # Acceleration is in SRAM, no EPROM unlock needed
-                servo.write_byte(servo_id, SMSReg.ACC, value)
+                servo.write_register(servo_id, 41, value)
                 return jsonify({'success': True})
             
             else:
@@ -2368,22 +2504,15 @@ def servo_program():
 
 @app.route('/api/servo/step', methods=['POST'])
 def servo_step():
-    """Move servo by a number of steps (step mode only)"""
+    """Queue servo step commands to prevent drift"""
     data = request.json
     servo_id = data.get('id')
     steps = data.get('steps', 0)
     
     with lock:
         if controller['servo']:
-            try:
-                servo = controller['servo']
-                servo_type = controller['servo_types'].get(servo_id, 'sts')
-                servo.configure_for_type(servo_type)
-                
-                servo.write_step(servo_id, steps)
-                return jsonify({'success': True})
-            except Exception as e:
-                return jsonify({'success': False, 'error': str(e)})
+            step_queues[servo_id].append(steps)
+            return jsonify({'success': True})
     return jsonify({'success': False, 'error': 'Not connected'})
 
 @app.route('/api/servo/step_mode', methods=['POST'])

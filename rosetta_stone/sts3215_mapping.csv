@@ -1,0 +1,58 @@
+Address,Memory,Value,Area,R/W
+0,Firmware Main Version,3,EPROM,r
+1,Firmware Secondary Version,10,EPROM,r
+3,Servo Main Version,9,EPROM,r
+4,Servo Sub Version,3,EPROM,d
+5,ID,10,EPROM,rw
+6,Baud Rate,0,EPROM,rw
+7,Reserved,0,EPROM,rw
+8,Status Return Level,1,EPROM,rw
+9,Min Position Limit,2320,EPROM,rw
+11,Max Position Limit,2920,EPROM,rw
+13,Max Temperature limit,70,EPROM,rw
+14,Max Input Voltage,140,EPROM,rw
+15,Min Input Voltage,40,EPROM,rw
+16,Max Torque Limit,1000,EPROM,rw
+18,Setting Byte,12,EPROM,rw
+19,Protection Switch,44,EPROM,rw
+20,LED Alarm Condition,47,EPROM,rw
+21,Position P Gain,32,EPROM,rw
+22,Position D Gain,32,EPROM,rw
+23,Position I Gain,0,EPROM,rw
+24,Punch,16,EPROM,rw
+25,MAX I,0,EPROM,rw
+26,CW Dead Band,1,EPROM,rw
+27,CCW Dead Band,1,EPROM,rw
+28,Overload Current,310,EPROM,rw
+30,Angular Resolution,1,EPROM,rw
+31,Position Offset Value,85,EPROM,rw
+33,Work Mode,0,EPROM,rw
+34,Protect Torque,20,EPROM,rw
+35,Overload Protection Time,200,EPROM,rw
+36,Overload Torque,80,EPROM,rw
+37,Velocity P Gain,10,EPROM,rw
+38,Overcurrent Protection,200,EPROM,rw
+39,Velocity I Gain,200,EPROM,rw
+40,Torque Enable,1,SRAM,rw
+41,Goal Acceleration,0,SRAM,rw
+42,Goal Position,2237,SRAM,rw
+44,Goal PWM,0,SRAM,rw
+46,Goal Velocity,0,SRAM,rw
+48,Torque Limit,1000,SRAM,rw
+55,Lock,1,SRAM,rw
+56,Present Position,2320,SRAM,r
+58,Present Velocity,0,SRAM,r
+60,Present PWM,0,SRAM,r
+62,Present Input Voltage,63,SRAM,r
+63,Present Temperature,28,SRAM,r
+64,Sync Write Flag,0,SRAM,r
+65,Hardware Error Status,0,SRAM,r
+66,Moving Status,0,SRAM,r
+69,Present Current,0,SRAM,r
+80,Moving Threshold,1,DEFAULT,d
+81,DTs(ms),20,DEFAULT,d
+82,Vk(ms),50,DEFAULT,d
+83,Vmin,1,DEFAULT,d
+84,Vmax,65,DEFAULT,d
+85,Amax,50,DEFAULT,d
+86,KAcc,1,DEFAULT,d
