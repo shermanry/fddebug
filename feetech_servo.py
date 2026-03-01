@@ -375,11 +375,11 @@ class FeetechServo:
     
     # Known USB-serial chip identifiers for servo adapters
     KNOWN_ADAPTERS = [
-        'CH340', 'CH341',      # Feetech URT-1, Waveshare
+        'CH340', 'CH341', 'CH343',  # Feetech URT-1, Waveshare (CH343 is newer)
         'CP210', 'CP2102',     # Waveshare, generic
         'FTDI', 'FT232',       # Generic USB-TTL
         'usbserial',           # macOS generic
-        'USB Serial', 'USB-Serial',  # Windows generic
+        'USB Serial', 'USB-Serial', 'USB-Enhanced-SERIAL',  # Windows generic
         'ttyUSB', 'ttyACM',    # Linux generic
         'wchusbserial',        # CH340 macOS driver
         'Prolific',            # PL2303
@@ -390,25 +390,33 @@ class FeetechServo:
         """Find available serial ports for servo adapters
         
         Detects:
-          - Feetech URT-1 (CH340)
+          - Feetech URT-1 (CH340/CH343)
           - Waveshare Bus Servo Adapter (CH340/CP210x)
           - Other USB-TTL adapters
         """
         ports = []
         for port in serial.tools.list_ports.comports():
-            # Check if this looks like a servo adapter
-            is_adapter = False
-            adapter_type = "Unknown"
-            
             desc_upper = (port.description or '').upper()
             hwid_upper = (port.hwid or '').upper()
             device_upper = port.device.upper()
+            
+            # Skip Bluetooth and debug ports
+            if 'BLUETOOTH' in desc_upper or 'BLUETOOTH' in hwid_upper or 'BTHENUM' in hwid_upper:
+                continue
+            if 'DEBUG' in device_upper:
+                continue
+            
+            # Check if this looks like a servo adapter
+            is_adapter = False
+            adapter_type = "Unknown"
             
             for chip in FeetechServo.KNOWN_ADAPTERS:
                 chip_upper = chip.upper()
                 if chip_upper in desc_upper or chip_upper in hwid_upper or chip_upper in device_upper:
                     is_adapter = True
-                    if 'CH340' in desc_upper or 'CH341' in desc_upper:
+                    if 'CH343' in desc_upper:
+                        adapter_type = "CH343 (URT-1)"
+                    elif 'CH340' in desc_upper or 'CH341' in desc_upper:
                         adapter_type = "CH340 (URT-1/Waveshare)"
                     elif 'CP210' in desc_upper:
                         adapter_type = "CP210x (Waveshare)"
@@ -426,7 +434,7 @@ class FeetechServo:
                 'adapter_type': adapter_type
             })
             
-            marker = "✓" if is_adapter else " "
+            marker = "*" if is_adapter else " "
             print(f"  {marker} {port.device}: {port.description} [{adapter_type}]")
         
         return ports

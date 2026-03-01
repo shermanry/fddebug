@@ -1601,7 +1601,7 @@ def get_ports():
     """Get available serial ports for servo adapters
     
     Supports:
-      - Feetech URT-1 (CH340)
+      - Feetech URT-1 (CH340/CH343)
       - Waveshare Bus Servo Adapter v1.1 (CH340/CP210x)
       - Other USB-TTL adapters
     """
@@ -1609,7 +1609,7 @@ def get_ports():
     
     # Known USB Vendor IDs for serial adapters
     KNOWN_VIDS = [
-        0x1A86,  # CH340/CH341 (URT-1, Waveshare)
+        0x1A86,  # CH340/CH341/CH343 (URT-1, Waveshare)
         0x10C4,  # Silicon Labs CP210x
         0x0403,  # FTDI
         0x067B,  # Prolific PL2303
@@ -1621,24 +1621,29 @@ def get_ports():
         hwid = (p.hwid or '').upper()
         device = p.device.upper()
         
+        # Skip Bluetooth and debug ports first
+        if 'BLUETOOTH' in desc or 'BLUETOOTH' in hwid or 'BTHENUM' in hwid:
+            continue
+        if 'DEBUG' in device:
+            continue
+        
         # Check by VID first (most reliable)
         is_adapter = p.vid in KNOWN_VIDS if p.vid else False
         
         # Also check by name patterns
         if not is_adapter:
-            patterns = ['USBSERIAL', 'USBMODEM', 'TTYUSB', 'TTYACM', 'COM', 
-                        'USB SERIAL', 'USB SINGLE SERIAL', 'CH340', 'CH341', 
-                        'CP210', 'FTDI', 'FT232', 'PROLIFIC']
+            patterns = ['USBSERIAL', 'USBMODEM', 'TTYUSB', 'TTYACM',
+                        'USB SERIAL', 'USB SINGLE SERIAL', 'USB-ENHANCED-SERIAL',
+                        'CH340', 'CH341', 'CH343', 'CP210', 'FTDI', 'FT232', 'PROLIFIC']
             is_adapter = any(pat in desc or pat in device for pat in patterns)
-        
-        # Skip Bluetooth and debug ports
-        if 'BLUETOOTH' in device or 'DEBUG' in device:
-            is_adapter = False
         
         if is_adapter:
             # Identify adapter type
             if p.vid == 0x1A86:
-                if 'SINGLE' in desc:
+                # WCH chips: CH340, CH341, CH343
+                if 'CH343' in desc:
+                    adapter_type = 'CH343 (URT-1)'
+                elif 'SINGLE' in desc:
                     adapter_type = 'Waveshare (CH340)'
                 else:
                     adapter_type = 'CH340 (URT-1)'
@@ -1646,6 +1651,8 @@ def get_ports():
                 adapter_type = 'CP210x'
             elif p.vid == 0x0403:
                 adapter_type = 'FTDI'
+            elif 'CH343' in desc:
+                adapter_type = 'CH343'
             elif 'CH340' in desc or 'CH341' in desc:
                 adapter_type = 'CH340'
             else:
