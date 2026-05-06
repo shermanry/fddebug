@@ -192,7 +192,26 @@ HTML_TEMPLATE = '''
             letter-spacing: 1px;
         }
         .card.connected .card-title { color: #00ddaa; }
-        
+
+        .type-badge {
+            display: none;
+            font-size: 11px;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            letter-spacing: 0.5px;
+            border: 1px solid transparent;
+            transition: all 0.2s;
+            user-select: none;
+        }
+        .type-badge:hover {
+            filter: brightness(1.3);
+            border-color: rgba(255,255,255,0.2);
+        }
+        .type-badge.scs { background: #1a3a2a; color: #44cc88; }
+        .type-badge.sts { background: #1a2a3a; color: #4488cc; }
+
         .card-status {
             width: 10px; height: 10px;
             border-radius: 50%;
@@ -927,6 +946,7 @@ HTML_TEMPLATE = '''
                     <div class="card" id="card${i}">
                         <div class="card-header">
                             <span class="card-title" id="cardTitle${i}">ID ${i + 1}</span>
+                            <span class="type-badge" id="typeBadge${i}" onclick="toggleType(${i})" title="Click to change servo type"></span>
                             <div class="card-status"></div>
                         </div>
                         <div class="id-row" style="display: none;">
@@ -1047,8 +1067,9 @@ HTML_TEMPLATE = '''
                     connBtn.textContent = `Connect ID ${idInput}`;
                     connBtn.classList.remove('success', 'error');
                     
-                    // Reset card title
+                    // Reset card title and type badge
                     document.getElementById('cardTitle' + i).textContent = `ID ${idInput}`;
+                    document.getElementById('typeBadge' + i).style.display = 'none';
                 }
             } else {
                 const port = document.getElementById('portSelect').value;
@@ -1158,29 +1179,25 @@ HTML_TEMPLATE = '''
                 const data = await resp.json();
                 
                 if (data.success) {
-                    // Success - update card title to just ID and type
+                    // Success - update card title and type badge
                     document.getElementById('card' + cardIdx).classList.add('connected');
-                    const typeLabel = data.type === 'sts' ? 'STS' : 'SCS';
+                    const servoType = data.type || 'sts';
                     
-                    // Update the card header to show the true ID
-                    document.getElementById('cardTitle' + cardIdx).textContent = `ID ${servoId} (${typeLabel})`;
+                    document.getElementById('cardTitle' + cardIdx).textContent = `ID ${servoId}`;
+                    updateTypeBadge(cardIdx, servoType);
                     
                     btn.textContent = '✓ Connected';
                     btn.classList.add('success');
                     btn.classList.remove('error');
                     updateCard(cardIdx, data);
-                    servos[cardIdx] = {id: servoId, type: data.type || 'sts'};
+                    servos[cardIdx] = {id: servoId, type: servoType};
                     
                     // Show step mode toggle only for STS servos
                     const stepToggle = document.getElementById('stepToggle' + cardIdx);
-                    if (data.type === 'sts') {
-                        stepToggle.style.display = 'block';
-                    } else {
-                        stepToggle.style.display = 'none';
-                    }
+                    stepToggle.style.display = servoType === 'sts' ? 'block' : 'none';
                     
                     startAutoRefresh();
-                    setStatus('Connected to ' + typeLabel + ' servo ID ' + servoId);
+                    setStatus('Connected to ' + servoType.toUpperCase() + ' servo ID ' + servoId);
                 } else {
                     // Failed - show error
                     btn.textContent = '✗ Not found';
@@ -1208,6 +1225,39 @@ HTML_TEMPLATE = '''
             }
         }
         
+        function updateTypeBadge(cardIdx, servoType) {
+            const badge = document.getElementById('typeBadge' + cardIdx);
+            badge.textContent = servoType.toUpperCase();
+            badge.className = 'type-badge ' + servoType;
+            badge.style.display = 'inline-block';
+        }
+
+        async function toggleType(cardIdx) {
+            if (!servos[cardIdx]) return;
+            const current = servos[cardIdx].type;
+            const newType = current === 'scs' ? 'sts' : 'scs';
+
+            try {
+                const resp = await fetch('/api/servo/type', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({id: servos[cardIdx].id, type: newType})
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    servos[cardIdx].type = newType;
+                    updateTypeBadge(cardIdx, newType);
+                    const stepToggle = document.getElementById('stepToggle' + cardIdx);
+                    stepToggle.style.display = newType === 'sts' ? 'block' : 'none';
+                    setStatus(`Servo ${servos[cardIdx].id} type set to ${newType.toUpperCase()}`);
+                    // Re-fetch status with correct endianness
+                    updateServo(cardIdx);
+                }
+            } catch (e) {
+                setStatus('Error changing type: ' + e.message);
+            }
+        }
+
         function updateCard(idx, data) {
             const pos = data.position;
             const posInput = document.getElementById('pos' + idx);
@@ -2052,6 +2102,22 @@ def disconnect():
             controller['port'] = None
             controller['connected_servos'] = {}
     return jsonify({'success': True})
+
+@app.route('/api/servo/type', methods=['POST'])
+def servo_set_type():
+    """Override auto-detected servo type (SCS or STS)"""
+    data = request.json
+    servo_id = data.get('id')
+    servo_type = data.get('type', '').lower()
+
+    if servo_type not in ('scs', 'sts'):
+        return jsonify({'success': False, 'error': 'Type must be scs or sts'})
+
+    with lock:
+        controller['servo_types'][servo_id] = servo_type
+        if controller['servo']:
+            controller['servo'].configure_for_type(servo_type)
+    return jsonify({'success': True, 'type': servo_type})
 
 @app.route('/api/scan')
 def scan():

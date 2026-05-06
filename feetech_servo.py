@@ -604,53 +604,70 @@ class FeetechServo:
     
     def detect_type(self, servo_id: int) -> str:
         """
-        Detect servo type (SCS or STS) by reading registers
-        
-        Detection strategy:
-        1. Check lock registers first (most reliable)
-        2. Use max limit value as secondary confirmation
-        
+        Best-effort servo type detection.  Results can be overridden by the
+        caller (e.g. from a user-selected type in the GUI).
+
+        Strategy:
+        1. Lock registers — SCS has LOCK at 48, STS has LOCK at 55.
+        2. STS-only registers — STS defines MODE(33), OFS(31-32),
+           ACCELERATION(41) which SCS doesn't.  Read a block and check
+           if the STS-extended range (49-54) holds non-zero EPROM data
+           that only STS would have.
+        3. Position / angle range — SCS is 10-bit (0-1023), STS is
+           12-bit (0-4095).  Try both endiannesses on raw bytes.
+        4. Default to SCS when ambiguous.
+
         Returns:
             'scs' or 'sts'
         """
-        # Save current endianness
         old_end = self.end
-        
-        # First, check lock registers - this is the most reliable method
-        # STS/SMS lock is at address 55, should be 0 or 1
-        # SCS lock is at address 48, should be 0 or 1
-        lock_55 = self.read_byte(servo_id, REG_LOCK_STS)  # STS lock at 55
-        lock_48 = self.read_byte(servo_id, REG_LOCK_SCS)  # SCS lock at 48
-        
-        # STS servo: lock at 55 is valid (0 or 1), lock at 48 is garbage
-        if lock_55 in [0, 1] and lock_48 not in [0, 1]:
+
+        # --- Lock registers (decisive when unambiguous) ---
+        lock_55 = self.read_byte(servo_id, REG_LOCK_STS)
+        lock_48 = self.read_byte(servo_id, REG_LOCK_SCS)
+
+        if lock_55 in (0, 1) and lock_48 not in (0, 1):
             self.end = old_end
             return 'sts'
-        
-        # SCS servo: lock at 48 is valid (0 or 1), lock at 55 is garbage
-        if lock_48 in [0, 1] and lock_55 not in [0, 1]:
+        if lock_48 in (0, 1) and lock_55 not in (0, 1):
             self.end = old_end
             return 'scs'
-        
-        # Both locks look valid - fall back to max limit check
-        # Try reading max limit with little-endian (STS default)
-        self.end = 0
-        max_limit = self.read_word(servo_id, REG_MAX_ANGLE)
-        
+
+        # --- STS-extended EPROM range (addrs 49-54) ---
+        # On STS these are part of the EPROM (speed-PID, torque-on-boot, etc.)
+        # and often hold non-zero factory defaults.
+        # On SCS, addrs 49-54 are past the EPROM boundary (LOCK=48) and are
+        # undefined RAM that reads as 0 after power-cycle.
+        extended = self.read_bytes(servo_id, 49, 6)  # addrs 49-54
+        if extended and len(extended) == 6:
+            if any(b != 0 for b in extended):
+                self.end = old_end
+                return 'sts'
+
+        # --- Voting across position / angle registers ---
+        scs_votes = 0
+        sts_votes = 0
+
+        for addr in (REG_PRESENT_POSITION, REG_MIN_ANGLE, REG_MAX_ANGLE):
+            raw = self.read_bytes(servo_id, addr, 2)
+            if not raw or len(raw) != 2:
+                continue
+            val_be = (raw[0] << 8) | raw[1]
+            val_le = (raw[1] << 8) | raw[0]
+            be_ok = 0 <= val_be <= 1023
+            le_ok = 0 <= val_le <= 4095
+            if be_ok and not le_ok:
+                scs_votes += 1
+            elif le_ok and not be_ok:
+                sts_votes += 1
+
         self.end = old_end
-        
-        # If reading LE gives value > 4096, it's IMPOSSIBLE for any servo
-        # This means it's an SCS servo (big-endian) being misread as little-endian
-        # Example: SCS bytes [0x02, 0x12] read as LE = 4610, but BE = 530
-        if max_limit > 4096:
+
+        if scs_votes > sts_votes:
             return 'scs'
-        
-        # If max limit is in 12-bit range (1024-4096), it's likely STS
-        if max_limit > 1023:
+        if sts_votes > scs_votes:
             return 'sts'
-        
-        # Max limit in 10-bit range (0-1023), could be either
-        # Default to SCS for low values since STS typically has higher defaults
+
         return 'scs'
     
     # ========================================================================
