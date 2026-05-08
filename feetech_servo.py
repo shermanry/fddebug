@@ -3,7 +3,7 @@
 Feetech Servo Controller for macOS/Windows
 Reverse-engineered from FD debugger SDK
 
-Supports: SCS, SMS, STS series servos
+Supports: SCS, SMS, STS, HLS series servos
 
 Compatible USB Adapters:
   - Feetech URT-1 (CH340)
@@ -18,7 +18,7 @@ from typing import Optional, List, Tuple, Dict, Type
 from dataclasses import dataclass
 from enum import IntEnum
 from abc import ABC, abstractmethod
-from servo_mappings import SCS_MEMORY_MAP, STS_MEMORY_MAP
+from servo_mappings import SCS_MEMORY_MAP, STS_MEMORY_MAP, HLS_MEMORY_MAP
 
 # ============================================================================
 # Protocol Constants
@@ -167,16 +167,54 @@ class STSType(ServoType):
     offset_register = REG_OFFSET  # 31
 
 
+class HLSType(ServoType):
+    """HLS series servos (HLS3606, etc.)"""
+
+    name = "hls"
+
+    # HLS uses little-endian byte order
+    endian = 0
+
+    # 12-bit resolution (0-4095)
+    resolution_bits = 12
+    max_position = 4095
+
+    # Lock register at address 55 (same as STS)
+    lock_register = REG_LOCK_STS  # 55
+
+    # Mode and offset supported, but NO step/multi-turn
+    supports_mode = True
+    supports_offset = True
+    supports_multi_turn = False
+    supports_acceleration = True
+
+    # Feature registers
+    mode_register = REG_MODE  # 33
+    offset_register = REG_OFFSET  # 31
+
+
 # Registry of all servo types for easy lookup
 SERVO_TYPES: Dict[str, Type[ServoType]] = {
     'scs': SCSType,
     'sts': STSType,
+    'hls': HLSType,
 }
 
 
 def get_servo_type(name: str) -> Type[ServoType]:
     """Get servo type class by name"""
     return SERVO_TYPES.get(name, ServoType)
+
+
+MEMORY_MAPS = {
+    'sts': STS_MEMORY_MAP,
+    'hls': HLS_MEMORY_MAP,
+}
+
+
+def get_memory_map(type_name: str) -> dict:
+    """Get the register memory map for a servo type name."""
+    return MEMORY_MAPS.get(type_name, SCS_MEMORY_MAP)
 
 
 # ============================================================================
@@ -441,7 +479,7 @@ class FeetechServo:
     def read_register(self, servo_id: int, address: int) -> int:
         """Read a register using the size and signedness from the servo type map"""
         type_class = self.get_type_class()
-        memory_map = STS_MEMORY_MAP if type_class.name == 'sts' else SCS_MEMORY_MAP
+        memory_map = get_memory_map(type_class.name)
         
         reg_info = memory_map.get(address)
         if not reg_info:
@@ -464,7 +502,7 @@ class FeetechServo:
     def write_register(self, servo_id: int, address: int, value: int) -> bool:
         """Write a register using the size and signedness from the servo type map"""
         type_class = self.get_type_class()
-        memory_map = STS_MEMORY_MAP if type_class.name == 'sts' else SCS_MEMORY_MAP
+        memory_map = get_memory_map(type_class.name)
         
         reg_info = memory_map.get(address)
         if not reg_info:
@@ -602,23 +640,59 @@ class FeetechServo:
         self.serial.timeout = old_timeout
         return found
     
+    def _is_hls(self, servo_id: int) -> bool:
+        """Check HLS-specific registers to distinguish HLS from STS.
+
+        HLS has:
+        - Eofs calibration value at addr 73-74 (non-zero, typically ~2037)
+        - SRAM PID mirrors at addr 50-52 that match EPROM PID at addr 21-23
+        - No register at addr 36 (reads 0xFF), while STS has Overload Torque
+        """
+        hls_score = 0
+
+        # Eofs (addr 73-74): HLS-unique calibration value, STS reads 0 here
+        eofs_raw = self.read_bytes(servo_id, 73, 2)
+        if eofs_raw and len(eofs_raw) == 2:
+            eofs = (eofs_raw[1] << 8) | eofs_raw[0]
+            if 100 <= eofs <= 10000:
+                hls_score += 2
+
+        # SRAM Kp/Kd (addr 50-51) should mirror EPROM P/D gains (addr 21-22)
+        kp = self.read_byte(servo_id, 50)
+        kd = self.read_byte(servo_id, 51)
+        p_gain = self.read_byte(servo_id, 21)
+        d_gain = self.read_byte(servo_id, 22)
+        if kp >= 0 and p_gain >= 0 and kp == p_gain and kp > 0:
+            hls_score += 1
+        if kd >= 0 and d_gain >= 0 and kd == d_gain and kd > 0:
+            hls_score += 1
+
+        # Addr 36: STS has Overload Torque (small value), HLS reads 0xFF
+        val36 = self.read_byte(servo_id, 36)
+        if val36 == 0xFF:
+            hls_score += 1
+
+        return hls_score >= 3
+
     def detect_type(self, servo_id: int) -> str:
         """
         Best-effort servo type detection.  Results can be overridden by the
         caller (e.g. from a user-selected type in the GUI).
 
         Strategy:
-        1. Lock registers — SCS has LOCK at 48, STS has LOCK at 55.
+        1. Lock registers — SCS has LOCK at 48, STS/HLS have LOCK at 55.
         2. STS-only registers — STS defines MODE(33), OFS(31-32),
            ACCELERATION(41) which SCS doesn't.  Read a block and check
            if the STS-extended range (49-54) holds non-zero EPROM data
-           that only STS would have.
-        3. Position / angle range — SCS is 10-bit (0-1023), STS is
+           that only STS/HLS would have.
+        3. Position / angle range — SCS is 10-bit (0-1023), STS/HLS are
            12-bit (0-4095).  Try both endiannesses on raw bytes.
-        4. Default to SCS when ambiguous.
+        4. HLS discrimination — once identified as non-SCS, check HLS-
+           specific registers (Eofs, SRAM PID mirrors, addr 36).
+        5. Default to SCS when ambiguous.
 
         Returns:
-            'scs' or 'sts'
+            'scs', 'sts', or 'hls'
         """
         old_end = self.end
 
@@ -627,22 +701,23 @@ class FeetechServo:
         lock_48 = self.read_byte(servo_id, REG_LOCK_SCS)
 
         if lock_55 in (0, 1) and lock_48 not in (0, 1):
+            result = 'hls' if self._is_hls(servo_id) else 'sts'
             self.end = old_end
-            return 'sts'
+            return result
         if lock_48 in (0, 1) and lock_55 not in (0, 1):
             self.end = old_end
             return 'scs'
 
         # --- STS-extended EPROM range (addrs 49-54) ---
-        # On STS these are part of the EPROM (speed-PID, torque-on-boot, etc.)
-        # and often hold non-zero factory defaults.
+        # On STS/HLS these hold meaningful data (PID, torque settings).
         # On SCS, addrs 49-54 are past the EPROM boundary (LOCK=48) and are
         # undefined RAM that reads as 0 after power-cycle.
         extended = self.read_bytes(servo_id, 49, 6)  # addrs 49-54
         if extended and len(extended) == 6:
             if any(b != 0 for b in extended):
+                result = 'hls' if self._is_hls(servo_id) else 'sts'
                 self.end = old_end
-                return 'sts'
+                return result
 
         # --- Voting across position / angle registers ---
         scs_votes = 0
@@ -666,7 +741,8 @@ class FeetechServo:
         if scs_votes > sts_votes:
             return 'scs'
         if sts_votes > scs_votes:
-            return 'sts'
+            result = 'hls' if self._is_hls(servo_id) else 'sts'
+            return result
 
         return 'scs'
     
@@ -756,10 +832,16 @@ class FeetechServo:
     # High-Level Servo Control
     # ========================================================================
     
-    def write_position(self, servo_id: int, position: int, time_ms: int = 0, speed: int = 0) -> bool:
-        """Move servo to position"""
+    def write_position(self, servo_id: int, position: int, time_ms: int = 0, speed: int = 0, torque: int = 0, acc: int = 0) -> bool:
+        """Move servo to position.
+        
+        HLS servos use a different write layout: 7 bytes from addr 41
+        [ACC, POS_L, POS_H, TORQUE_L, TORQUE_H, SPEED_L, SPEED_H]
+        SCS/STS use 6 bytes from addr 42:
+        [POS_L, POS_H, TIME_L, TIME_H, SPEED_L, SPEED_H]
+        """
         type_class = self.get_type_class()
-        memory_map = STS_MEMORY_MAP if type_class.name == 'sts' else SCS_MEMORY_MAP
+        memory_map = get_memory_map(type_class.name)
         
         reg_info = memory_map.get(REG_GOAL_POSITION)
         if reg_info and reg_info.get('signed_bit') is not None:
@@ -771,8 +853,14 @@ class FeetechServo:
             
         pos_l, pos_h = self._host2scs(position)
         
-        # SCS doesn't have multi-turn or sign-magnitude for speed/time here typically
-        # And STS docs say these time/speed args in GOAL_POSITION write are unsigned magnitude
+        if type_class.name == 'hls':
+            torque_l, torque_h = self._host2scs(torque & 0xFFFF)
+            speed_l, speed_h = self._host2scs(speed & 0xFFFF)
+            data = bytes([acc & 0xFF, pos_l, pos_h, torque_l, torque_h, speed_l, speed_h])
+            self.serial.reset_input_buffer()
+            self._write_buf(servo_id, REG_ACC, data, Instruction.WRITE)
+            return self._ack(servo_id)
+        
         time_l, time_h = self._host2scs(time_ms & 0xFFFF)
         speed_l, speed_h = self._host2scs(speed & 0xFFFF)
         
@@ -974,25 +1062,26 @@ class FeetechServo:
             
         return result
     
-    def write_position_with_acc(self, servo_id: int, position: int, speed: int, acc: int = 0) -> bool:
+    def write_position_with_acc(self, servo_id: int, position: int, speed: int, acc: int = 0, torque: int = 0) -> bool:
         """
-        Move servo to position with acceleration control (STS/SMS only)
+        Move servo to position with acceleration control (STS/SMS/HLS).
         
-        Args:
-            servo_id: Servo ID
-            position: Target position (can be signed for multi-turn)
-            speed: Movement speed
-            acc: Acceleration (0=max)
+        For HLS, bytes 3-4 are Goal Torque instead of Running Time.
         """
-        # Handle signed position (Two's Complement)
         if position < 0:
             position = 0x10000 + position
         position = max(0, min(0xFFFF, position))
         
         pos_l, pos_h = self._host2scs(position)
         speed_l, speed_h = self._host2scs(speed)
-        
-        data = bytes([acc, pos_l, pos_h, 0, 0, speed_l, speed_h])
+
+        type_class = self.get_type_class()
+        if type_class.name == 'hls':
+            torque_l, torque_h = self._host2scs(torque & 0xFFFF)
+            data = bytes([acc, pos_l, pos_h, torque_l, torque_h, speed_l, speed_h])
+        else:
+            data = bytes([acc, pos_l, pos_h, 0, 0, speed_l, speed_h])
+
         self.serial.reset_input_buffer()
         self._write_buf(servo_id, REG_ACC, data, Instruction.WRITE)
         return self._ack(servo_id)
@@ -1186,7 +1275,7 @@ class FeetechServo:
         checksum = BROADCAST_ID + msg_len + Instruction.SYNC_WRITE + REG_GOAL_POSITION + data_len
         
         type_class = self.get_type_class()
-        memory_map = STS_MEMORY_MAP if type_class.name == 'sts' else SCS_MEMORY_MAP
+        memory_map = get_memory_map(type_class.name)
         reg_info = memory_map.get(REG_GOAL_POSITION)
 
         for servo_id, position, time_ms, speed in servos:

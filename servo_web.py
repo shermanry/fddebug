@@ -6,7 +6,7 @@ Beautiful dark theme with programming features
 
 from flask import Flask, render_template_string, jsonify, request
 import serial.tools.list_ports
-from feetech_servo import FeetechServo, BaudRate, get_servo_type, SCSType, STSType
+from feetech_servo import FeetechServo, BaudRate, get_servo_type, SCSType, STSType, HLSType
 import threading
 import time
 from collections import defaultdict
@@ -18,7 +18,7 @@ controller = {
     'servo': None,
     'port': None,
     'connected_servos': {},  # card_idx -> servo_id
-    'servo_types': {}  # servo_id -> 'scs' or 'sts'
+    'servo_types': {}  # servo_id -> 'scs', 'sts', or 'hls'
 }
 lock = threading.Lock()
 
@@ -211,6 +211,7 @@ HTML_TEMPLATE = '''
         }
         .type-badge.scs { background: #1a3a2a; color: #44cc88; }
         .type-badge.sts { background: #1a2a3a; color: #4488cc; }
+        .type-badge.hls { background: #2a1a3a; color: #aa66dd; }
 
         .card-status {
             width: 10px; height: 10px;
@@ -699,7 +700,7 @@ HTML_TEMPLATE = '''
             </div>
             
             <div class="form-section sts-only">
-                <div class="form-section-title">Mode (STS/SMS only)</div>
+                <div class="form-section-title">Operating Mode</div>
                 
                 <div class="form-row">
                     <span class="form-label">Current Mode:</span>
@@ -773,7 +774,7 @@ HTML_TEMPLATE = '''
             </div>
             
             <div class="form-section sts-only">
-                <div class="form-section-title">Offset (STS/SMS only)</div>
+                <div class="form-section-title">Position Offset</div>
                 
                 <div class="form-row">
                     <span class="form-label">Offset:</span>
@@ -838,20 +839,20 @@ HTML_TEMPLATE = '''
             </div>
             
             <div class="form-section">
-                <div class="form-section-title">Overload Protection</div>
+                <div class="form-section-title" id="overloadSectionTitle">Overload Protection</div>
                 
                 <div class="form-row">
-                    <span class="form-label">Protection Torque:</span>
+                    <span class="form-label" id="protectionTorqueLabel">Protection Torque:</span>
                     <input type="number" class="form-input" id="protectionTorque" min="0" max="255" placeholder="0-255">
                     <button class="primary" onclick="setProtectionTorque()">Set</button>
                 </div>
                 <div class="form-row">
-                    <span class="form-label">Protection Time (s):</span>
+                    <span class="form-label" id="protectionTimeLabel">Protection Time (s):</span>
                     <input type="number" class="form-input" id="protectionTime" min="0" max="255" placeholder="0-255">
                     <button class="primary" onclick="setProtectionTime()">Set</button>
                 </div>
                 <div class="form-row">
-                    <span class="form-label">Protection Current:</span>
+                    <span class="form-label">Overload Current:</span>
                     <input type="number" class="form-input" id="protectionCurrent" min="0" max="1023" placeholder="0-1023">
                     <button class="primary" onclick="setProtectionCurrent()">Set</button>
                 </div>
@@ -884,7 +885,7 @@ HTML_TEMPLATE = '''
             </div>
             
             <div class="form-section sts-only">
-                <div class="form-section-title">Speed Loop (STS/SMS)</div>
+                <div class="form-section-title" id="speedLoopTitle">Speed Loop (STS/SMS)</div>
                 
                 <div class="form-row">
                     <span class="form-label">Speed P:</span>
@@ -900,6 +901,51 @@ HTML_TEMPLATE = '''
                     <span class="form-label">Acceleration:</span>
                     <input type="number" class="form-input" id="acceleration" min="0" max="254" placeholder="0-254">
                     <button class="primary" onclick="setAcceleration()">Set</button>
+                </div>
+            </div>
+            
+            <div class="form-section hls-only" style="display:none">
+                <div class="form-section-title">Torque Limit (SRAM)</div>
+                
+                <div class="form-row">
+                    <span class="form-label">Torque Limit:</span>
+                    <input type="number" class="form-input" id="torqueLimit" min="0" max="1000" placeholder="0-1000">
+                    <button class="primary" onclick="setTorqueLimit()">Set</button>
+                </div>
+            </div>
+            
+            <div class="form-section hls-only" style="display:none">
+                <div class="form-section-title">Runtime PID (SRAM)</div>
+                
+                <div class="form-row">
+                    <span class="form-label">Kp:</span>
+                    <input type="number" class="form-input" id="sramKp" min="0" max="255" placeholder="0-255">
+                    <button class="primary" onclick="setSramKp()">Set</button>
+                </div>
+                <div class="form-row">
+                    <span class="form-label">Kd:</span>
+                    <input type="number" class="form-input" id="sramKd" min="0" max="255" placeholder="0-255">
+                    <button class="primary" onclick="setSramKd()">Set</button>
+                </div>
+                <div class="form-row">
+                    <span class="form-label">Ki:</span>
+                    <input type="number" class="form-input" id="sramKi" min="0" max="255" placeholder="0-255">
+                    <button class="primary" onclick="setSramKi()">Set</button>
+                </div>
+            </div>
+            
+            <div class="form-section hls-only" style="display:none">
+                <div class="form-section-title">HLS Identity</div>
+                
+                <div class="form-row">
+                    <span class="form-label">Second ID:</span>
+                    <input type="number" class="form-input" id="secondId" min="0" max="253" placeholder="0-253">
+                    <button class="primary" onclick="setSecondId()">Set</button>
+                </div>
+                <div class="form-row">
+                    <span class="form-label">Angular Resolution:</span>
+                    <input type="number" class="form-input" id="angularRes" min="1" max="255" placeholder="1">
+                    <button class="primary" onclick="setAngularRes()">Set</button>
                 </div>
             </div>
             
@@ -1010,6 +1056,10 @@ HTML_TEMPLATE = '''
                                 <div class="status-value" id="load${i}">--</div>
                                 <div class="status-label">Load</div>
                             </div>
+                            <div class="status-item" id="currentItem${i}" style="display:none">
+                                <div class="status-value" id="current${i}">--</div>
+                                <div class="status-label">Current</div>
+                            </div>
                         </div>
                         <button class="program-btn" onclick="openProgram(${i})">⚙️ Program</button>
                     </div>
@@ -1061,6 +1111,8 @@ HTML_TEMPLATE = '''
                     document.getElementById('volt' + i).textContent = '--';
                     document.getElementById('temp' + i).textContent = '--';
                     document.getElementById('load' + i).textContent = '--';
+                    document.getElementById('current' + i).textContent = '--';
+                    document.getElementById('currentItem' + i).style.display = 'none';
                     // Reset connect buttons
                     const connBtn = document.getElementById('connectBtn' + i);
                     const idInput = document.getElementById('id' + i).value;
@@ -1106,7 +1158,7 @@ HTML_TEMPLATE = '''
                 if (servos[i]) {
                     const min = document.getElementById('slider' + i).min;
                     const max = document.getElementById('slider' + i).max;
-                    const typeLabel = servos[i].type === 'sts' ? 'STS' : 'SCS';
+                    const typeLabel = servos[i].type.toUpperCase();
                     msg += `ID ${servos[i].id} (${typeLabel}): Min ${min}, Max ${max}\\n`;
                     found = true;
                 }
@@ -1196,6 +1248,9 @@ HTML_TEMPLATE = '''
                     const stepToggle = document.getElementById('stepToggle' + cardIdx);
                     stepToggle.style.display = servoType === 'sts' ? 'block' : 'none';
                     
+                    // Show current display for HLS
+                    document.getElementById('currentItem' + cardIdx).style.display = servoType === 'hls' ? '' : 'none';
+
                     startAutoRefresh();
                     setStatus('Connected to ' + servoType.toUpperCase() + ' servo ID ' + servoId);
                 } else {
@@ -1235,7 +1290,8 @@ HTML_TEMPLATE = '''
         async function toggleType(cardIdx) {
             if (!servos[cardIdx]) return;
             const current = servos[cardIdx].type;
-            const newType = current === 'scs' ? 'sts' : 'scs';
+            const cycle = {scs: 'sts', sts: 'hls', hls: 'scs'};
+            const newType = cycle[current] || 'scs';
 
             try {
                 const resp = await fetch('/api/servo/type', {
@@ -1250,7 +1306,6 @@ HTML_TEMPLATE = '''
                     const stepToggle = document.getElementById('stepToggle' + cardIdx);
                     stepToggle.style.display = newType === 'sts' ? 'block' : 'none';
                     setStatus(`Servo ${servos[cardIdx].id} type set to ${newType.toUpperCase()}`);
-                    // Re-fetch status with correct endianness
                     updateServo(cardIdx);
                 }
             } catch (e) {
@@ -1300,6 +1355,19 @@ HTML_TEMPLATE = '''
                 document.getElementById('load' + idx).textContent = loadPct + '%';
             } else {
                 document.getElementById('load' + idx).textContent = '--';
+            }
+            
+            // Present Current (HLS only)
+            const currentItem = document.getElementById('currentItem' + idx);
+            if (servos[idx] && servos[idx].type === 'hls') {
+                currentItem.style.display = '';
+                if (data.current != null) {
+                    document.getElementById('current' + idx).textContent = data.current.toFixed(0) + 'mA';
+                } else {
+                    document.getElementById('current' + idx).textContent = '--';
+                }
+            } else {
+                currentItem.style.display = 'none';
             }
             
             // Update torque button
@@ -1609,10 +1677,11 @@ HTML_TEMPLATE = '''
                 return;
             }
             currentProgramServo = servos[cardIdx];  // {id, type}
-            const typeLabel = currentProgramServo.type === 'sts' ? 'STS' : 'SCS';
+            const typeLabel = currentProgramServo.type.toUpperCase();
             document.getElementById('modalServoId').textContent = `${typeLabel} ID ${currentProgramServo.id}`;
             document.getElementById('currentId').textContent = currentProgramServo.id;
             document.getElementById('newId').value = '';
+            updateModeDropdown(currentProgramServo.type);
             document.getElementById('programModal').classList.add('active');
             readAllSettings();
         }
@@ -1628,14 +1697,33 @@ HTML_TEMPLATE = '''
             const data = await resp.json();
             if (data.success) {
                 document.getElementById('currentId').textContent = currentProgramServo.id;
-                // Show/hide STS-only options
-                const isSTS = currentProgramServo.type === 'sts';
+                const sType = currentProgramServo.type;
+                const hasMode = sType === 'sts' || sType === 'hls';
+                const isHLS = sType === 'hls';
+
+                // Show/hide STS-only options (STS and HLS both support mode/offset/acc)
                 document.querySelectorAll('.sts-only').forEach(el => {
-                    el.style.display = isSTS ? 'flex' : 'none';
+                    el.style.display = hasMode ? 'flex' : 'none';
                 });
+                document.querySelectorAll('.hls-only').forEach(el => {
+                    el.style.display = isHLS ? 'flex' : 'none';
+                });
+
+                // Dynamic labels for Overload Protection section (addr 34/35 differ)
+                if (isHLS) {
+                    document.getElementById('overloadSectionTitle').textContent = 'Current Loop / Protection';
+                    document.getElementById('protectionTorqueLabel').textContent = 'Current P Gain:';
+                    document.getElementById('protectionTimeLabel').textContent = 'Current I Gain:';
+                    document.getElementById('speedLoopTitle').textContent = 'Speed Loop (HLS)';
+                } else {
+                    document.getElementById('overloadSectionTitle').textContent = 'Overload Protection';
+                    document.getElementById('protectionTorqueLabel').textContent = 'Protection Torque:';
+                    document.getElementById('protectionTimeLabel').textContent = 'Protection Time (s):';
+                    document.getElementById('speedLoopTitle').textContent = 'Speed Loop (STS/SMS)';
+                }
                 
                 // Identity & Mode
-                document.getElementById('currentMode').textContent = isSTS ? getModeText(data.mode) : 'N/A (SCS)';
+                document.getElementById('currentMode').textContent = hasMode ? getModeText(data.mode) : 'N/A (SCS)';
                 document.getElementById('currentBaud').textContent = getBaudText(data.baud);
                 
                 // Angle Limits
@@ -1663,7 +1751,7 @@ HTML_TEMPLATE = '''
                 document.getElementById('minVoltage').value = data.min_voltage || 5.0;
                 document.getElementById('maxVoltage').value = data.max_voltage || 8.4;
                 
-                // Overload Protection
+                // Overload Protection / Current Loop
                 document.getElementById('protectionTorque').value = data.protection_torque || 0;
                 document.getElementById('protectionTime').value = data.protection_time || 0;
                 document.getElementById('protectionCurrent').value = data.protection_current || 0;
@@ -1676,6 +1764,16 @@ HTML_TEMPLATE = '''
                 document.getElementById('speedP').value = data.speed_p || 0;
                 document.getElementById('speedI').value = data.speed_i || 0;
                 document.getElementById('acceleration').value = data.acceleration || 0;
+                
+                // HLS-specific fields
+                if (isHLS) {
+                    document.getElementById('torqueLimit').value = data.torque_limit || 1000;
+                    document.getElementById('sramKp').value = data.sram_kp || 0;
+                    document.getElementById('sramKd').value = data.sram_kd || 0;
+                    document.getElementById('sramKi').value = data.sram_ki || 0;
+                    document.getElementById('secondId').value = data.second_id || 253;
+                    document.getElementById('angularRes').value = data.angular_res || 1;
+                }
                 
                 // Update torque status display
                 const torqueStatus = document.getElementById('currentTorque');
@@ -1700,8 +1798,34 @@ HTML_TEMPLATE = '''
         }
         
         function getModeText(mode) {
+            const servoType = currentProgramServo ? currentProgramServo.type : 'sts';
+            if (servoType === 'hls') {
+                const modes = ['Position (Servo)', 'Wheel (Continuous)', 'Electric/Force'];
+                return modes[mode] || `Unknown (${mode})`;
+            }
             const modes = ['Position (Servo)', 'Wheel (Continuous)', 'PWM', 'Step'];
             return modes[mode] || `Unknown (${mode})`;
+        }
+
+        function updateModeDropdown(servoType) {
+            const sel = document.getElementById('newMode');
+            sel.innerHTML = '';
+            const opts = [
+                {value: 0, text: 'Position Control (Servo)'},
+                {value: 1, text: 'Wheel Mode (Continuous)'},
+            ];
+            if (servoType === 'hls') {
+                opts.push({value: 2, text: 'Electric/Force (Torque)'});
+            } else {
+                opts.push({value: 2, text: 'PWM Mode'});
+                opts.push({value: 3, text: 'Multi-turn Mode'});
+            }
+            opts.forEach(o => {
+                const opt = document.createElement('option');
+                opt.value = o.value;
+                opt.textContent = o.text;
+                sel.appendChild(opt);
+            });
         }
         
         function getBaudText(baud) {
@@ -1903,7 +2027,27 @@ HTML_TEMPLATE = '''
         async function setAcceleration() {
             await programValue('acceleration', 'acceleration', 'Acceleration');
         }
-        
+
+        // HLS-specific setters
+        async function setTorqueLimit() {
+            await programValue('torque_limit', 'torqueLimit', 'Torque Limit');
+        }
+        async function setSramKp() {
+            await programValue('sram_kp', 'sramKp', 'SRAM Kp');
+        }
+        async function setSramKd() {
+            await programValue('sram_kd', 'sramKd', 'SRAM Kd');
+        }
+        async function setSramKi() {
+            await programValue('sram_ki', 'sramKi', 'SRAM Ki');
+        }
+        async function setSecondId() {
+            await programValue('second_id', 'secondId', 'Second ID');
+        }
+        async function setAngularRes() {
+            await programValue('angular_res', 'angularRes', 'Angular Resolution');
+        }
+
         // Generic helper to program a value
         async function programValue(action, inputId, label) {
             const val = parseInt(document.getElementById(inputId).value);
@@ -2105,13 +2249,13 @@ def disconnect():
 
 @app.route('/api/servo/type', methods=['POST'])
 def servo_set_type():
-    """Override auto-detected servo type (SCS or STS)"""
+    """Override auto-detected servo type (SCS, STS, or HLS)"""
     data = request.json
     servo_id = data.get('id')
     servo_type = data.get('type', '').lower()
 
-    if servo_type not in ('scs', 'sts'):
-        return jsonify({'success': False, 'error': 'Type must be scs or sts'})
+    if servo_type not in ('scs', 'sts', 'hls'):
+        return jsonify({'success': False, 'error': 'Type must be scs, sts, or hls'})
 
     with lock:
         controller['servo_types'][servo_id] = servo_type
@@ -2174,6 +2318,12 @@ def servo_connect():
             load = servo.read_load(servo_id)
             torque = servo.read_register(servo_id, 40)
             
+            current_ma = None
+            if servo_type == 'hls':
+                raw_current = servo.read_register(servo_id, 69)
+                if raw_current is not None and raw_current >= 0:
+                    current_ma = raw_current * 6.5
+            
             controller['connected_servos'][card_idx] = servo_id
             
             return jsonify({
@@ -2184,6 +2334,7 @@ def servo_connect():
                 'voltage': voltage if voltage >= 0 else None,
                 'temp': temp if temp >= 0 else None,
                 'load': load if load >= 0 else None,
+                'current': current_ma,
                 'type': servo_type,
                 'torque': torque == 1
             })
@@ -2201,11 +2352,16 @@ def servo_position():
             try:
                 servo = controller['servo']
                 servo_type = controller['servo_types'].get(servo_id, 'sts')
+                servo.configure_for_type(servo_type)
                 
-                # Set correct endianness: SCS uses big-endian, STS uses little-endian
-                servo.end = 1 if servo_type == 'scs' else 0
-                
-                servo.write_position(servo_id, position, speed=1000)
+                if servo_type == 'hls':
+                    # Read the current SRAM Torque Limit so moves respect it
+                    torque_lim = servo.read_register(servo_id, 48)
+                    if torque_lim < 0:
+                        torque_lim = 1000
+                    servo.write_position(servo_id, position, speed=1000, torque=torque_lim)
+                else:
+                    servo.write_position(servo_id, position, speed=1000)
                 return jsonify({'success': True})
             except Exception as e:
                 return jsonify({'success': False, 'error': str(e)})
@@ -2250,6 +2406,13 @@ def servo_status():
             else:
                 mode = 0
             
+            # Present current (HLS has sign-magnitude at addr 69)
+            current_ma = None
+            if servo_type == 'hls':
+                raw_current = servo.read_register(servo_id, 69)
+                if raw_current is not None and raw_current >= 0:
+                    current_ma = raw_current * 6.5
+            
             return jsonify({
                 'success': True,
                 'position': pos,
@@ -2258,6 +2421,7 @@ def servo_status():
                 'voltage': voltage if voltage >= 0 else None,
                 'temp': temp if temp >= 0 else None,
                 'load': load if load >= 0 else None,
+                'current': current_ma,
                 'torque': torque == 1,
                 'mode': mode if mode >= 0 else 0
             })
@@ -2328,7 +2492,7 @@ def servo_settings():
             led_alarm = servo.read_register(servo_id, 20)
             unloading = servo.read_register(servo_id, 19)
             
-            # STS-specific speed loop
+            # Speed loop (STS and HLS)
             if type_class.supports_acceleration:
                 speed_p = servo.read_register(servo_id, 37)
                 speed_i = servo.read_register(servo_id, 39)
@@ -2338,7 +2502,25 @@ def servo_settings():
                 speed_i = 0
                 acceleration = 0
             
-            return jsonify({
+            # HLS-specific registers
+            hls_data = {}
+            if servo_type == 'hls':
+                torque_limit = servo.read_register(servo_id, 48)
+                sram_kp = servo.read_byte(servo_id, 50)
+                sram_kd = servo.read_byte(servo_id, 51)
+                sram_ki = servo.read_byte(servo_id, 52)
+                second_id = servo.read_byte(servo_id, 7)
+                angular_res = servo.read_byte(servo_id, 30)
+                hls_data = {
+                    'torque_limit': torque_limit if torque_limit >= 0 else 1000,
+                    'sram_kp': sram_kp if sram_kp >= 0 else 0,
+                    'sram_kd': sram_kd if sram_kd >= 0 else 0,
+                    'sram_ki': sram_ki if sram_ki >= 0 else 0,
+                    'second_id': second_id if second_id >= 0 else 253,
+                    'angular_res': angular_res if angular_res >= 0 else 1,
+                }
+            
+            result = {
                 'success': True,
                 'type': servo_type,
                 'mode': mode if mode >= 0 else 0,
@@ -2369,8 +2551,10 @@ def servo_settings():
                 # Speed loop
                 'speed_p': speed_p if speed_p >= 0 else 0,
                 'speed_i': speed_i if speed_i >= 0 else 0,
-                'acceleration': acceleration if acceleration >= 0 else 0
-            })
+                'acceleration': acceleration if acceleration >= 0 else 0,
+            }
+            result.update(hls_data)
+            return jsonify(result)
         except Exception as e:
             return jsonify({'success': False, 'error': str(e)})
 
@@ -2560,6 +2744,36 @@ def servo_program():
             elif action == 'acceleration':
                 # Acceleration is in SRAM, no EPROM unlock needed
                 servo.write_register(servo_id, 41, value)
+                return jsonify({'success': True})
+            
+            # HLS SRAM registers (no EPROM unlock needed)
+            elif action == 'torque_limit':
+                servo.write_word(servo_id, 48, value)
+                return jsonify({'success': True})
+            
+            elif action == 'sram_kp':
+                servo.write_byte(servo_id, 50, value)
+                return jsonify({'success': True})
+            
+            elif action == 'sram_kd':
+                servo.write_byte(servo_id, 51, value)
+                return jsonify({'success': True})
+            
+            elif action == 'sram_ki':
+                servo.write_byte(servo_id, 52, value)
+                return jsonify({'success': True})
+            
+            # HLS EPROM registers
+            elif action == 'second_id':
+                servo.unlock_eprom(servo_id, servo_type)
+                servo.write_byte(servo_id, 7, value)
+                servo.lock_eprom(servo_id, servo_type)
+                return jsonify({'success': True})
+            
+            elif action == 'angular_res':
+                servo.unlock_eprom(servo_id, servo_type)
+                servo.write_byte(servo_id, 30, value)
+                servo.lock_eprom(servo_id, servo_type)
                 return jsonify({'success': True})
             
             else:

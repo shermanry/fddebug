@@ -1,0 +1,380 @@
+{
+  "0": {
+    "name": "Firmware Main Version",
+    "val": 3,
+    "size": 1,
+    "area": "EPROM"
+  },
+  "1": {
+    "name": "Firmware Secondary Version",
+    "val": 43,
+    "size": 1,
+    "area": "EPROM"
+  },
+  "3": {
+    "name": "Servo Main Version",
+    "val": 10,
+    "size": 1,
+    "area": "EPROM"
+  },
+  "4": {
+    "name": "Servo Sub Version",
+    "val": 10,
+    "size": 1,
+    "area": "EPROM"
+  },
+  "5": {
+    "name": "ID",
+    "val": 1,
+    "size": 1,
+    "area": "EPROM"
+  },
+  "6": {
+    "name": "Baud Rate",
+    "val": 0,
+    "size": 1,
+    "area": "EPROM"
+  },
+  "7": {
+    "name": "Second ID",
+    "val": 253,
+    "size": 1,
+    "area": "EPROM"
+  },
+  "8": {
+    "name": "Status Return Level",
+    "val": 1,
+    "size": 1,
+    "area": "EPROM"
+  },
+  "9": {
+    "name": "Min Position Limit",
+    "val": 0,
+    "size": 2,
+    "area": "EPROM"
+  },
+  "11": {
+    "name": "Max Position Limit",
+    "val": 0,
+    "size": 2,
+    "area": "EPROM"
+  },
+  "13": {
+    "name": "Max Temperature limit",
+    "val": 80,
+    "size": 1,
+    "area": "EPROM"
+  },
+  "14": {
+    "name": "Max Input Voltage",
+    "val": 100,
+    "size": 1,
+    "area": "EPROM"
+  },
+  "15": {
+    "name": "Min Input Voltage",
+    "val": 40,
+    "size": 1,
+    "area": "EPROM"
+  },
+  "16": {
+    "name": "Max Torque Limit",
+    "val": 1000,
+    "size": 2,
+    "area": "EPROM"
+  },
+  "18": {
+    "name": "Setting Byte",
+    "val": 118,
+    "size": 1,
+    "area": "EPROM"
+  },
+  "19": {
+    "name": "Protection Switch",
+    "val": 13,
+    "size": 1,
+    "area": "EPROM"
+  },
+  "20": {
+    "name": "LED Alarm Condition",
+    "val": 0,
+    "size": 1,
+    "area": "EPROM"
+  },
+  "21": {
+    "name": "Position P Gain",
+    "val": 32,
+    "size": 1,
+    "area": "EPROM"
+  },
+  "22": {
+    "name": "Position D Gain",
+    "val": 32,
+    "size": 1,
+    "area": "EPROM"
+  },
+  "23": {
+    "name": "Position I Gain",
+    "val": 0,
+    "size": 1,
+    "area": "EPROM"
+  },
+  "24": {
+    "name": "Punch",
+    "val": 24,
+    "size": 1,
+    "area": "EPROM"
+  },
+  "25": {
+    "name": "MAX I",
+    "val": 0,
+    "size": 1,
+    "area": "EPROM"
+  },
+  "26": {
+    "name": "CW Dead Band",
+    "val": 0,
+    "size": 1,
+    "area": "EPROM"
+  },
+  "27": {
+    "name": "CCW Dead Band",
+    "val": 0,
+    "size": 1,
+    "area": "EPROM"
+  },
+  "28": {
+    "name": "Overload Current",
+    "val": 800,
+    "size": 2,
+    "area": "EPROM"
+  },
+  "30": {
+    "name": "Angular Resolution",
+    "val": 1,
+    "size": 1,
+    "area": "EPROM"
+  },
+  "31": {
+    "name": "Position Offset Value",
+    "val": 0,
+    "size": 2,
+    "area": "EPROM"
+  },
+  "33": {
+    "name": "Work Mode",
+    "val": 0,
+    "size": 1,
+    "area": "EPROM"
+  },
+  "34": {
+    "name": "Current P Gain",
+    "val": 100,
+    "size": 1,
+    "area": "EPROM"
+  },
+  "35": {
+    "name": "Current I Gain",
+    "val": 25,
+    "size": 1,
+    "area": "EPROM"
+  },
+  "37": {
+    "name": "Velocity P Gain",
+    "val": 50,
+    "size": 1,
+    "area": "EPROM"
+  },
+  "38": {
+    "name": "Overcurrent Protection Time",
+    "val": 100,
+    "size": 1,
+    "area": "EPROM"
+  },
+  "39": {
+    "name": "Velocity I Gain",
+    "val": 25,
+    "size": 1,
+    "area": "EPROM"
+  },
+  "40": {
+    "name": "Torque Enable",
+    "val": 1,
+    "size": 1,
+    "area": "SRAM"
+  },
+  "41": {
+    "name": "Goal Acceleration",
+    "val": 0,
+    "size": 1,
+    "area": "SRAM"
+  },
+  "42": {
+    "name": "Goal Position",
+    "val": 2246,
+    "size": 2,
+    "area": "SRAM"
+  },
+  "44": {
+    "name": "Goal Torque",
+    "val": 0,
+    "size": 2,
+    "area": "SRAM"
+  },
+  "46": {
+    "name": "Goal Velocity",
+    "val": 1000,
+    "size": 2,
+    "area": "SRAM"
+  },
+  "48": {
+    "name": "Torque Limit",
+    "val": 1000,
+    "size": 2,
+    "area": "SRAM"
+  },
+  "50": {
+    "name": "Kp",
+    "val": 32,
+    "size": 1,
+    "area": "SRAM"
+  },
+  "51": {
+    "name": "Kd",
+    "val": 32,
+    "size": 1,
+    "area": "SRAM"
+  },
+  "52": {
+    "name": "Ki",
+    "val": 0,
+    "size": 1,
+    "area": "SRAM"
+  },
+  "55": {
+    "name": "Lock",
+    "val": 1,
+    "size": 1,
+    "area": "SRAM"
+  },
+  "56": {
+    "name": "Present Position",
+    "val": 4119,
+    "size": 2,
+    "area": "SRAM"
+  },
+  "58": {
+    "name": "Present Velocity",
+    "val": 0,
+    "size": 2,
+    "area": "SRAM"
+  },
+  "60": {
+    "name": "Present Load",
+    "val": 1055,
+    "size": 2,
+    "area": "SRAM"
+  },
+  "62": {
+    "name": "Present Input Voltage",
+    "val": 59,
+    "size": 1,
+    "area": "SRAM"
+  },
+  "63": {
+    "name": "Present Temperature",
+    "val": 31,
+    "size": 1,
+    "area": "SRAM"
+  },
+  "64": {
+    "name": "Sync Write Flag",
+    "val": 0,
+    "size": 1,
+    "area": "SRAM"
+  },
+  "65": {
+    "name": "Hardware Error Status",
+    "val": 0,
+    "size": 1,
+    "area": "SRAM"
+  },
+  "66": {
+    "name": "Moving Status",
+    "val": 2,
+    "size": 1,
+    "area": "SRAM"
+  },
+  "69": {
+    "name": "Present Current",
+    "val": 32773,
+    "size": 2,
+    "area": "SRAM"
+  },
+  "73": {
+    "name": "Eofs",
+    "val": 2037,
+    "size": 2,
+    "area": "SRAM"
+  },
+  "77": {
+    "name": "vFk(*10)",
+    "val": 60,
+    "size": 1,
+    "area": "DEFAULT"
+  },
+  "78": {
+    "name": "vKgI",
+    "val": 1,
+    "size": 1,
+    "area": "DEFAULT"
+  },
+  "79": {
+    "name": "pFk(*10)",
+    "val": 60,
+    "size": 1,
+    "area": "DEFAULT"
+  },
+  "80": {
+    "name": "Vmin",
+    "val": 1,
+    "size": 1,
+    "area": "DEFAULT"
+  },
+  "81": {
+    "name": "DTs(ms)",
+    "val": 3,
+    "size": 1,
+    "area": "DEFAULT"
+  },
+  "82": {
+    "name": "eFk(*10)",
+    "val": 60,
+    "size": 1,
+    "area": "DEFAULT"
+  },
+  "83": {
+    "name": "Vk(ms)",
+    "val": 20,
+    "size": 1,
+    "area": "DEFAULT"
+  },
+  "84": {
+    "name": "Vmax",
+    "val": 250,
+    "size": 1,
+    "area": "DEFAULT"
+  },
+  "85": {
+    "name": "Amax",
+    "val": 0,
+    "size": 1,
+    "area": "DEFAULT"
+  },
+  "86": {
+    "name": "KAcc",
+    "val": 0,
+    "size": 1,
+    "area": "DEFAULT"
+  }
+}
