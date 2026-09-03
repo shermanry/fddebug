@@ -1148,6 +1148,17 @@ HTML_TEMPLATE = '''
 
                 select.innerHTML += '<option value="__custom__">Custom port path...</option>';
 
+                // If nothing is selected yet, auto-select the first real port option
+                if (!select.value) {
+                    for (let i = 0; i < select.options.length; i++) {
+                        const val = select.options[i].value;
+                        if (val && val !== '__custom__') {
+                            select.value = val;
+                            break;
+                        }
+                    }
+                }
+
                 // If already connected on the server
                 if (data.connected && data.connected_port) {
                     connected = true;
@@ -1227,7 +1238,7 @@ HTML_TEMPLATE = '''
                     scanAll();
                 } else {
                     setStatus('Connection failed: ' + (data.error || 'Unknown error'));
-                    alert('Could not open port ' + port + ':\n' + (data.error || 'Check wiring/permissions'));
+                    alert('Could not open port ' + port + ':\\n' + (data.error || 'Check wiring/permissions'));
                 }
             }
         }
