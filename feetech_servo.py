@@ -14,6 +14,9 @@ Compatible USB Adapters:
 import serial
 import serial.tools.list_ports
 import time
+import sys
+import os
+import glob
 from typing import Optional, List, Tuple, Dict, Type
 from dataclasses import dataclass
 from enum import IntEnum
@@ -292,16 +295,20 @@ class FeetechServo:
     # Port Management
     # ========================================================================
     
-    # Known USB-serial chip identifiers for servo adapters
+    # Known USB-serial and hardware UART identifiers for servo adapters
     KNOWN_ADAPTERS = [
         'CH340', 'CH341', 'CH343',  # Feetech URT-1, Waveshare (CH343 is newer)
         'CP210', 'CP2102',     # Waveshare, generic
         'FTDI', 'FT232',       # Generic USB-TTL
         'usbserial',           # macOS generic
         'USB Serial', 'USB-Serial', 'USB-Enhanced-SERIAL',  # Windows generic
-        'ttyUSB', 'ttyACM',    # Linux generic
+        'ttyUSB', 'ttyACM',    # Linux generic USB
         'wchusbserial',        # CH340 macOS driver
         'Prolific',            # PL2303
+        'ttyAMA',              # Raspberry Pi PL011 hardware UARTs (URT-1 via GPIO)
+        'serial0', 'serial1',  # Raspberry Pi UART symlinks
+        'ttyTHS',              # NVIDIA Jetson hardware UARTs
+        'ttyS0',               # Raspberry Pi Mini UART
     ]
     
     @staticmethod
@@ -309,12 +316,53 @@ class FeetechServo:
         """Find available serial ports for servo adapters
         
         Detects:
-          - Feetech URT-1 (CH340/CH343)
-          - Waveshare Bus Servo Adapter (CH340/CP210x)
-          - Other USB-TTL adapters
+          - Feetech URT-1 (CH340/CH343 USB)
+          - Waveshare Bus Servo Adapter (CH340/CP210x USB)
+          - Raspberry Pi 4 Hardware UARTs (URT-1 via GPIO: /dev/serial0, /dev/ttyAMA0..4)
+          - Other USB-TTL and SBC hardware UART adapters
         """
         ports = []
+        seen = set()
+
+        # Check for Linux / Raspberry Pi hardware UARTs
+        if sys.platform.startswith('linux'):
+            pi_candidates = [
+                ('/dev/serial0', 'Raspberry Pi Primary UART (serial0)'),
+                ('/dev/serial1', 'Raspberry Pi Secondary UART (serial1)'),
+                ('/dev/ttyAMA0', 'Raspberry Pi Hardware UART0 (PL011 / ttyAMA0)'),
+                ('/dev/ttyAMA1', 'Raspberry Pi 4 Hardware UART2 (PL011 / ttyAMA1)'),
+                ('/dev/ttyAMA2', 'Raspberry Pi 4 Hardware UART3 (PL011 / ttyAMA2)'),
+                ('/dev/ttyAMA3', 'Raspberry Pi 4 Hardware UART4 (PL011 / ttyAMA3)'),
+                ('/dev/ttyAMA4', 'Raspberry Pi 4 Hardware UART5 (PL011 / ttyAMA4)'),
+                ('/dev/ttyS0', 'Raspberry Pi Mini UART (ttyS0)'),
+            ]
+            for dev_path, desc in pi_candidates:
+                if os.path.exists(dev_path) and dev_path not in seen:
+                    real = os.path.realpath(dev_path)
+                    full_desc = desc if real == dev_path else f"{desc} -> {os.path.basename(real)}"
+                    seen.add(dev_path)
+                    ports.append({
+                        'device': dev_path,
+                        'description': full_desc,
+                        'hwid': 'HARDWARE_UART',
+                        'is_adapter': True,
+                        'adapter_type': 'Raspberry Pi UART (URT-1)'
+                    })
+            for dev_path in glob.glob('/dev/ttyTHS*'):
+                if os.path.exists(dev_path) and dev_path not in seen:
+                    seen.add(dev_path)
+                    ports.append({
+                        'device': dev_path,
+                        'description': f'NVIDIA Jetson UART ({os.path.basename(dev_path)})',
+                        'hwid': 'HARDWARE_UART',
+                        'is_adapter': True,
+                        'adapter_type': 'Jetson UART (URT-1)'
+                    })
+
         for port in serial.tools.list_ports.comports():
+            if port.device in seen:
+                continue
+
             desc_upper = (port.description or '').upper()
             hwid_upper = (port.hwid or '').upper()
             device_upper = port.device.upper()
@@ -325,26 +373,34 @@ class FeetechServo:
             if 'DEBUG' in device_upper:
                 continue
             
-            # Check if this looks like a servo adapter
+            # Check if this looks like a servo adapter or hardware UART
             is_adapter = False
             adapter_type = "Unknown"
+
+            if any(u in device_upper for u in ['TTYAMA', 'SERIAL0', 'SERIAL1']):
+                is_adapter = True
+                adapter_type = "Raspberry Pi UART (URT-1)"
+            elif 'TTYTHS' in device_upper:
+                is_adapter = True
+                adapter_type = "Jetson UART (URT-1)"
+            else:
+                for chip in FeetechServo.KNOWN_ADAPTERS:
+                    chip_upper = chip.upper()
+                    if chip_upper in desc_upper or chip_upper in hwid_upper or chip_upper in device_upper:
+                        is_adapter = True
+                        if 'CH343' in desc_upper:
+                            adapter_type = "CH343 (URT-1)"
+                        elif 'CH340' in desc_upper or 'CH341' in desc_upper:
+                            adapter_type = "CH340 (URT-1/Waveshare)"
+                        elif 'CP210' in desc_upper:
+                            adapter_type = "CP210x (Waveshare)"
+                        elif 'FTDI' in desc_upper or 'FT232' in desc_upper:
+                            adapter_type = "FTDI"
+                        else:
+                            adapter_type = chip
+                        break
             
-            for chip in FeetechServo.KNOWN_ADAPTERS:
-                chip_upper = chip.upper()
-                if chip_upper in desc_upper or chip_upper in hwid_upper or chip_upper in device_upper:
-                    is_adapter = True
-                    if 'CH343' in desc_upper:
-                        adapter_type = "CH343 (URT-1)"
-                    elif 'CH340' in desc_upper or 'CH341' in desc_upper:
-                        adapter_type = "CH340 (URT-1/Waveshare)"
-                    elif 'CP210' in desc_upper:
-                        adapter_type = "CP210x (Waveshare)"
-                    elif 'FTDI' in desc_upper or 'FT232' in desc_upper:
-                        adapter_type = "FTDI"
-                    else:
-                        adapter_type = chip
-                    break
-            
+            seen.add(port.device)
             ports.append({
                 'device': port.device,
                 'description': port.description,
@@ -361,24 +417,31 @@ class FeetechServo:
     @staticmethod
     def auto_detect_port() -> Optional[str]:
         """Auto-detect the best serial port for servo communication"""
+        # First preference: known USB servo adapters
         for port in serial.tools.list_ports.comports():
             desc = (port.description or '').upper()
             hwid = (port.hwid or '').upper()
             device = port.device.upper()
             
             # Check for known adapter chips
-            for chip in FeetechServo.KNOWN_ADAPTERS:
+            for chip in ['CH340', 'CH341', 'CH343', 'CP210', 'FTDI', 'usbserial', 'wchusbserial']:
                 if chip.upper() in desc or chip.upper() in hwid or chip.upper() in device:
                     return port.device
-        
+
+        # Second preference: Raspberry Pi hardware UART (/dev/serial0 or /dev/ttyAMA0)
+        if sys.platform.startswith('linux'):
+            for pi_dev in ['/dev/serial0', '/dev/ttyAMA0']:
+                if os.path.exists(pi_dev):
+                    return pi_dev
+
         return None
     
     def open(self, port: str, baudrate: int = 1000000) -> bool:
         """
-        Open serial connection to URT-1 debugger
+        Open serial connection to URT-1 debugger (USB or Raspberry Pi hardware UART)
         
         Args:
-            port: Serial port path (e.g., '/dev/tty.usbserial-1410')
+            port: Serial port path (e.g. '/dev/tty.usbserial-1410', '/dev/serial0', '/dev/ttyAMA0')
             baudrate: Communication speed (default 1000000 for most servos)
         
         Returns:
@@ -391,7 +454,10 @@ class FeetechServo:
                 bytesize=serial.EIGHTBITS,
                 parity=serial.PARITY_NONE,
                 stopbits=serial.STOPBITS_ONE,
-                timeout=self.timeout
+                timeout=self.timeout,
+                rtscts=False,
+                dsrdtr=False,
+                xonxoff=False
             )
             self.serial.reset_input_buffer()
             self.serial.reset_output_buffer()
@@ -399,6 +465,10 @@ class FeetechServo:
         except serial.SerialException as e:
             print(f"Error opening port: {e}")
             return False
+    
+    def is_open(self) -> bool:
+        """Check if serial connection is open"""
+        return bool(self.serial and self.serial.is_open)
     
     def close(self):
         """Close serial connection"""

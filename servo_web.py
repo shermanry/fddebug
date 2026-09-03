@@ -6,6 +6,9 @@ Beautiful dark theme with programming features
 
 from flask import Flask, render_template_string, jsonify, request
 import serial.tools.list_ports
+import os
+import sys
+import glob
 from feetech_servo import FeetechServo, BaudRate, get_servo_type, SCSType, STSType, HLSType
 import threading
 import time
@@ -17,6 +20,7 @@ app = Flask(__name__)
 controller = {
     'servo': None,
     'port': None,
+    'baudrate': 1000000,
     'connected_servos': {},  # card_idx -> servo_id
     'servo_types': {}  # servo_id -> 'scs', 'sts', or 'hls'
 }
@@ -645,8 +649,17 @@ HTML_TEMPLATE = '''
         <div class="logo">◈ FEETECH <span>Servo Control</span></div>
         <div class="connection">
             <div class="status-dot" id="connDot"></div>
-            <select id="portSelect">
+            <select id="portSelect" onchange="onPortSelectChange()" title="Select Serial Port / UART Interface">
                 <option value="">Select Port...</option>
+            </select>
+            <input type="text" id="customPortInput" placeholder="/dev/serial0" title="Custom port path (e.g. /dev/serial0, /dev/ttyAMA0)" style="display:none; padding: 6px 10px; background: rgba(30,30,45,0.8); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; color: #fff; width: 140px; font-size: 13px;">
+            <select id="baudSelect" title="Communication Baud Rate" style="width: 105px; font-size: 12px; padding: 6px 8px;">
+                <option value="1000000" selected>1M baud</option>
+                <option value="500000">500K baud</option>
+                <option value="250000">250K baud</option>
+                <option value="115200">115.2K</option>
+                <option value="57600">57.6K</option>
+                <option value="38400">38.4K</option>
             </select>
             <button class="primary" id="connectBtn" onclick="toggleConnect()">Connect</button>
         </div>
@@ -1070,6 +1083,17 @@ HTML_TEMPLATE = '''
         function setStatus(text) {
             document.getElementById('statusText').textContent = text;
         }
+
+        function onPortSelectChange() {
+            const select = document.getElementById('portSelect');
+            const customInput = document.getElementById('customPortInput');
+            if (select.value === '__custom__') {
+                customInput.style.display = 'inline-block';
+                customInput.focus();
+            } else {
+                customInput.style.display = 'none';
+            }
+        }
         
         async function loadPorts() {
             try {
@@ -1078,11 +1102,66 @@ HTML_TEMPLATE = '''
                 console.log("Loaded ports:", data);
                 const select = document.getElementById('portSelect');
                 select.innerHTML = '<option value="">Select Port...</option>';
-                if (data.ports && data.ports.length > 0) {
+                
+                const existingDevices = new Set();
+                const details = data.details || [];
+                
+                if (details.length > 0) {
+                    details.forEach(p => {
+                        existingDevices.add(p.device);
+                        const ifaceTag = p.type ? ` [${p.type}]` : '';
+                        select.innerHTML += `<option value="${p.device}">${p.device}${ifaceTag}</option>`;
+                    });
+                    if (data.connected_port) {
+                        select.value = data.connected_port;
+                    } else {
+                        select.value = details[0].device;
+                    }
+                } else if (data.ports && data.ports.length > 0) {
                     data.ports.forEach(port => {
+                        existingDevices.add(port);
                         select.innerHTML += `<option value="${port}">${port}</option>`;
                     });
-                    select.value = data.ports[0];
+                    if (data.connected_port) select.value = data.connected_port;
+                    else select.value = data.ports[0];
+                }
+
+                // Add Raspberry Pi hardware UART presets if not already enumerated
+                const rpiPresets = [
+                    {device: '/dev/serial0', label: '/dev/serial0 [Pi 4 Primary UART]'},
+                    {device: '/dev/ttyAMA0', label: '/dev/ttyAMA0 [Pi 4 PL011 UART]'},
+                    {device: '/dev/ttyAMA1', label: '/dev/ttyAMA1 [Pi 4 UART2 / GPIO 0,1]'}
+                ];
+                let addedPresets = false;
+                rpiPresets.forEach(preset => {
+                    if (!existingDevices.has(preset.device)) {
+                        if (!addedPresets) {
+                            select.innerHTML += `<optgroup label="Raspberry Pi Presets">`;
+                            addedPresets = true;
+                        }
+                        select.innerHTML += `<option value="${preset.device}">${preset.label}</option>`;
+                    }
+                });
+                if (addedPresets) {
+                    select.innerHTML += `</optgroup>`;
+                }
+
+                select.innerHTML += '<option value="__custom__">Custom port path...</option>';
+
+                // If already connected on the server
+                if (data.connected && data.connected_port) {
+                    connected = true;
+                    const btn = document.getElementById('connectBtn');
+                    const dot = document.getElementById('connDot');
+                    btn.textContent = 'Disconnect';
+                    btn.classList.remove('primary');
+                    btn.classList.add('danger');
+                    dot.classList.add('connected');
+                    if (data.connected_baud) {
+                        document.getElementById('baudSelect').value = data.connected_baud;
+                    }
+                    setStatus(`Connected to ${data.connected_port} @ ${(data.connected_baud || 1000000).toLocaleString()} baud`);
+                    startAutoRefresh();
                 }
             } catch (e) {
                 console.error("Failed to load ports:", e);
@@ -1124,13 +1203,18 @@ HTML_TEMPLATE = '''
                     document.getElementById('typeBadge' + i).style.display = 'none';
                 }
             } else {
-                const port = document.getElementById('portSelect').value;
-                if (!port) { alert('Select a port first'); return; }
-                setStatus('Connecting...');
+                const portSelect = document.getElementById('portSelect');
+                let port = portSelect.value;
+                if (port === '__custom__') {
+                    port = document.getElementById('customPortInput').value.trim();
+                }
+                if (!port) { alert('Select or enter a port first'); return; }
+                const baud = parseInt(document.getElementById('baudSelect').value) || 1000000;
+                setStatus('Connecting to ' + port + '...');
                 const resp = await fetch('/api/connect', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({port: port})
+                    body: JSON.stringify({port: port, baudrate: baud})
                 });
                 const data = await resp.json();
                 if (data.success) {
@@ -1139,11 +1223,11 @@ HTML_TEMPLATE = '''
                     btn.classList.remove('primary');
                     btn.classList.add('danger');
                     dot.classList.add('connected');
-                    setStatus('Connected! Scanning...');
+                    setStatus(`Connected to ${port} @ ${baud.toLocaleString()} baud! Scanning...`);
                     scanAll();
                 } else {
-                    setStatus('Connection failed: ' + data.error);
-                    alert('Failed to connect: ' + data.error);
+                    setStatus('Connection failed: ' + (data.error || 'Unknown error'));
+                    alert('Could not open port ' + port + ':\n' + (data.error || 'Check wiring/permissions'));
                 }
             }
         }
@@ -2152,13 +2236,55 @@ def get_ports():
     """Get available serial ports for servo adapters
     
     Supports:
-      - Feetech URT-1 (CH340/CH343)
-      - Waveshare Bus Servo Adapter v1.1 (CH340/CP210x)
-      - Other USB-TTL adapters
+      - Feetech URT-1 (CH340/CH343 USB)
+      - Waveshare Bus Servo Adapter v1.1 (CH340/CP210x USB)
+      - Raspberry Pi 4 Hardware UARTs (connected to URT-1 via GPIO: /dev/serial0, /dev/ttyAMA0..4)
+      - Other USB-TTL and SBC hardware UART adapters
     """
     all_ports = []
+    seen_devices = set()
     
-    # Known USB Vendor IDs for serial adapters
+    # 1. Check for Linux / Raspberry Pi hardware UARTs
+    # On Raspberry Pi OS, /dev/serial0 is the primary UART alias (usually ttyAMA0 or ttyS0).
+    # Pi 4 also provides 4 additional PL011 UARTs (ttyAMA1 to ttyAMA4).
+    if sys.platform.startswith('linux'):
+        pi_uart_candidates = [
+            ('/dev/serial0', 'Raspberry Pi Primary UART (URT-1)'),
+            ('/dev/serial1', 'Raspberry Pi Secondary UART (URT-1)'),
+            ('/dev/ttyAMA0', 'Raspberry Pi Hardware UART0 (PL011 / URT-1)'),
+            ('/dev/ttyAMA1', 'Raspberry Pi 4 Hardware UART2 (PL011 / URT-1)'),
+            ('/dev/ttyAMA2', 'Raspberry Pi 4 Hardware UART3 (PL011 / URT-1)'),
+            ('/dev/ttyAMA3', 'Raspberry Pi 4 Hardware UART4 (PL011 / URT-1)'),
+            ('/dev/ttyAMA4', 'Raspberry Pi 4 Hardware UART5 (PL011 / URT-1)'),
+            ('/dev/ttyS0', 'Raspberry Pi Mini UART (URT-1)'),
+        ]
+        for dev_path, desc in pi_uart_candidates:
+            if os.path.exists(dev_path) and dev_path not in seen_devices:
+                real_target = os.path.realpath(dev_path)
+                detail_desc = desc
+                if real_target != dev_path:
+                    detail_desc += f" -> {os.path.basename(real_target)}"
+                
+                seen_devices.add(dev_path)
+                all_ports.append({
+                    'device': dev_path,
+                    'description': detail_desc,
+                    'type': 'Pi UART (URT-1)',
+                    'interface': 'uart'
+                })
+
+        # Also check NVIDIA Jetson / other SBC hardware UARTs
+        for dev_path in glob.glob('/dev/ttyTHS*'):
+            if dev_path not in seen_devices and os.path.exists(dev_path):
+                seen_devices.add(dev_path)
+                all_ports.append({
+                    'device': dev_path,
+                    'description': f'NVIDIA Jetson UART ({os.path.basename(dev_path)})',
+                    'type': 'Jetson UART (URT-1)',
+                    'interface': 'uart'
+                })
+
+    # 2. Check standard USB-serial adapters and COM ports via pyserial
     KNOWN_VIDS = [
         0x1A86,  # CH340/CH341/CH343 (URT-1, Waveshare)
         0x10C4,  # Silicon Labs CP210x
@@ -2168,16 +2294,39 @@ def get_ports():
     ]
     
     for p in serial.tools.list_ports.comports():
+        if p.device in seen_devices:
+            continue
+
         desc = (p.description or '').upper()
         hwid = (p.hwid or '').upper()
-        device = p.device.upper()
+        device_upper = p.device.upper()
         
         # Skip Bluetooth and debug ports first
         if 'BLUETOOTH' in desc or 'BLUETOOTH' in hwid or 'BTHENUM' in hwid:
             continue
-        if 'DEBUG' in device:
+        if 'DEBUG' in device_upper:
             continue
         
+        # Check for Raspberry Pi / hardware UART entries returned by comports()
+        if any(u in device_upper for u in ['TTYAMA', 'SERIAL0', 'SERIAL1']):
+            seen_devices.add(p.device)
+            all_ports.append({
+                'device': p.device,
+                'description': p.description or 'Raspberry Pi UART (URT-1)',
+                'type': 'Pi UART (URT-1)',
+                'interface': 'uart'
+            })
+            continue
+        elif 'TTYTHS' in device_upper:
+            seen_devices.add(p.device)
+            all_ports.append({
+                'device': p.device,
+                'description': p.description or 'Jetson UART (URT-1)',
+                'type': 'Jetson UART (URT-1)',
+                'interface': 'uart'
+            })
+            continue
+
         # Check by VID first (most reliable)
         is_adapter = p.vid in KNOWN_VIDS if p.vid else False
         
@@ -2186,9 +2335,10 @@ def get_ports():
             patterns = ['USBSERIAL', 'USBMODEM', 'TTYUSB', 'TTYACM',
                         'USB SERIAL', 'USB SINGLE SERIAL', 'USB-ENHANCED-SERIAL',
                         'CH340', 'CH341', 'CH343', 'CP210', 'FTDI', 'FT232', 'PROLIFIC']
-            is_adapter = any(pat in desc or pat in device for pat in patterns)
+            is_adapter = any(pat in desc or pat in device_upper for pat in patterns)
         
         if is_adapter:
+            seen_devices.add(p.device)
             # Identify adapter type
             if p.vid == 0x1A86:
                 # WCH chips: CH340, CH341, CH343
@@ -2203,39 +2353,49 @@ def get_ports():
             elif p.vid == 0x0403:
                 adapter_type = 'FTDI'
             elif 'CH343' in desc:
-                adapter_type = 'CH343'
+                adapter_type = 'CH343 (URT-1)'
             elif 'CH340' in desc or 'CH341' in desc:
-                adapter_type = 'CH340'
+                adapter_type = 'CH340 (URT-1)'
             else:
                 adapter_type = 'USB-Serial'
             
             all_ports.append({
                 'device': p.device,
                 'description': p.description,
-                'type': adapter_type
+                'type': adapter_type,
+                'interface': 'usb'
             })
     
     return jsonify({
         'ports': [p['device'] for p in all_ports],
-        'details': all_ports
+        'details': all_ports,
+        'connected_port': controller['port'],
+        'connected_baud': controller.get('baudrate', 1000000),
+        'connected': bool(controller['servo'] and controller['servo'].is_open())
     })
 
 @app.route('/api/connect', methods=['POST'])
 def connect():
-    data = request.json
+    data = request.json or {}
     port = data.get('port')
+    baudrate = int(data.get('baudrate', 1000000))
+    
+    if not port:
+        return jsonify({'success': False, 'error': 'No port specified'})
     
     with lock:
         if controller['servo']:
             controller['servo'].close()
         
         controller['servo'] = FeetechServo()
-        if controller['servo'].open(port):
+        if controller['servo'].open(port, baudrate=baudrate):
             controller['port'] = port
-            return jsonify({'success': True})
+            controller['baudrate'] = baudrate
+            return jsonify({'success': True, 'port': port, 'baudrate': baudrate})
         else:
             controller['servo'] = None
-            return jsonify({'success': False, 'error': 'Could not open port'})
+            controller['port'] = None
+            return jsonify({'success': False, 'error': f'Could not open {port} at {baudrate:,} baud'})
 
 @app.route('/api/disconnect', methods=['POST'])
 def disconnect():
@@ -2855,15 +3015,33 @@ def stop_all():
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Feetech Servo Control - Web Interface")
-    parser.add_argument("--port", "-p", type=int, default=8080, help="Port to listen on (default: 8080)")
+    parser.add_argument("--port", "-p", type=int, default=8080, help="Web server port to listen on (default: 8080)")
     parser.add_argument("--host", default="0.0.0.0", help="Host interface to bind to (default: 0.0.0.0)")
+    parser.add_argument("--serial-port", "--device", "-s", default=None,
+                        help="Serial port to auto-connect to (e.g. /dev/serial0, /dev/ttyAMA0, /dev/ttyUSB0)")
+    parser.add_argument("--baudrate", "-b", type=int, default=1000000,
+                        help="Serial communication baud rate (default: 1000000)")
     parser.add_argument("--debug", action="store_true", help="Enable Flask debug mode")
     args = parser.parse_args()
+
+    # Auto-connect if serial port specified via CLI
+    if args.serial_port:
+        with lock:
+            controller['servo'] = FeetechServo()
+            if controller['servo'].open(args.serial_port, baudrate=args.baudrate):
+                controller['port'] = args.serial_port
+                controller['baudrate'] = args.baudrate
+                print(f"✓ Connected to serial port: {args.serial_port} @ {args.baudrate:,} baud")
+            else:
+                controller['servo'] = None
+                print(f"❌ Failed to connect to serial port: {args.serial_port}")
 
     print("\n" + "="*50)
     print("  Feetech Servo Control - Web Interface")
     print("="*50)
     print(f"\n  Open your browser to: http://localhost:{args.port}")
+    if args.serial_port and controller['port']:
+        print(f"  Serial interface: {controller['port']} @ {controller['baudrate']:,} baud")
     print("\n  Press Ctrl+C to stop the server\n")
     app.run(host=args.host, port=args.port, debug=args.debug)
 

@@ -15,13 +15,15 @@ A cross-platform GUI application and Python library for controlling Feetech serv
 
 ## Supported Hardware
 
-### USB Adapters
+### Port Interfaces & Adapters
 
-| Adapter | Chip | Status |
-|---------|------|--------|
-| **Feetech URT-1** | CH340 | ✅ Fully supported |
-| **Waveshare Bus Servo Adapter v1.1** | CH340/CP210x | ✅ Fully supported |
-| Generic USB-TTL | CH340/CH341/CP210x/FTDI | ✅ Should work |
+| Interface | Hardware / Adapter | Device / Port Path | Status |
+|-----------|-------------------|-------------------|--------|
+| **USB Serial** | Feetech URT-1 (CH340/CH343) | `/dev/ttyUSB*`, `/dev/cu.usbserial-*`, `COM*` | ✅ Fully supported |
+| **USB Serial** | Waveshare Bus Servo Adapter v1.1 | `/dev/ttyUSB*`, `COM*` | ✅ Fully supported |
+| **Hardware UART** | **Raspberry Pi 4 + URT-1** (GPIO) | `/dev/serial0`, `/dev/ttyAMA0`, `/dev/ttyAMA1..4` | ✅ Fully supported |
+| **Hardware UART** | Generic Linux SBC + URT-1 (Jetson, etc.) | `/dev/ttyTHS*`, `/dev/ttyS*` | ✅ Supported |
+| Generic USB-TTL | CH340 / CP210x / FTDI | Any standard COM / tty port | ✅ Supported |
 
 ### Servos
 
@@ -115,11 +117,74 @@ This creates `Feetech_Servo_Controller_v1.0.0.zip` containing everything users n
 
 ## Usage
 
-### Connecting
+### Connecting via USB
 
-1. Plug in your URT-1 USB debugger
-2. Select the serial port from the dropdown (usually `/dev/cu.usbserial-*` on Mac, `COM*` on Windows)
-3. Click **Connect**
+1. Plug in your URT-1 USB debugger or Waveshare adapter
+2. Select the serial port from the dropdown (e.g. `/dev/cu.usbserial-*` on macOS, `/dev/ttyUSB*` on Linux, `COM*` on Windows)
+3. Select your baud rate (default: `1,000,000`)
+4. Click **Connect**
+
+### Connecting via Raspberry Pi 4 Hardware UART + URT-1
+
+Connecting the URT-1 directly to the Raspberry Pi 4's hardware UART provides lower latency and avoids USB cabling overhead in embedded robot arms and cobots.
+
+#### 1. Hardware Wiring
+
+Connect the Pi 4's 40-pin GPIO header to the URT-1's UART/TTL pin header:
+
+| Raspberry Pi 4 Pin | Pi Function | URT-1 Pin | Notes |
+|--------------------|-------------|-----------|-------|
+| **Pin 8** | GPIO 14 (TXD0) | **RXD** | Data transmit from Pi to URT-1 |
+| **Pin 10** | GPIO 15 (RXD0) | **TXD** | Data receive from URT-1 to Pi |
+| **Pin 6 / 9 / 14** | GND | **GND** | Common ground (mandatory) |
+| External Power Supply | +V / GND | **VIN / GND** | 6V–12V DC power for servos. **Do not power servos from Pi 5V pin!** |
+
+> **Direction Control**: The URT-1 has built-in automatic half-duplex direction control for the Feetech 1-wire bus. No extra GPIO direction pins or manual RTS toggling are needed.
+
+#### 2. Raspberry Pi OS Configuration
+
+1. Disable the serial console and enable hardware UART:
+   ```bash
+   sudo raspi-config
+   ```
+   Navigate to: **Interface Options** -> **Serial Port**:
+   - *"Would you like a login shell to be accessible over serial?"* -> **No**
+   - *"Would you like the serial port hardware to be enabled?"* -> **Yes**
+
+2. Add your user to the `dialout` group for permissions:
+   ```bash
+   sudo usermod -a -G dialout $USER
+   ```
+   *(Log out and back in for this to take effect)*
+
+3. *(Recommended)* Ensure high-speed PL011 UART is assigned to GPIO 14/15 by adding this to `/boot/firmware/config.txt` (or `/boot/config.txt` on older OS releases):
+   ```ini
+   enable_uart=1
+   dtoverlay=disable-bt
+   ```
+   *(Reboot after modifying `config.txt`)*
+
+   *Optional: If using Pi 4 additional PL011 UARTs (UART2 through UART5):*
+   - `dtoverlay=uart2` -> GPIO 0 (TX) / GPIO 1 (RX) -> `/dev/ttyAMA1`
+   - `dtoverlay=uart3` -> GPIO 4 (TX) / GPIO 5 (RX) -> `/dev/ttyAMA2`
+   - `dtoverlay=uart4` -> GPIO 8 (TX) / GPIO 9 (RX) -> `/dev/ttyAMA3`
+   - `dtoverlay=uart5` -> GPIO 12 (TX) / GPIO 13 (RX) -> `/dev/ttyAMA4`
+
+#### 3. Connecting
+
+- **From Web UI**: Select `/dev/serial0` (or `/dev/ttyAMA0`) from the dropdown (or choose *Custom port path...*), ensure baud rate is `1,000,000`, and click **Connect**.
+- **Headless / Auto-Connect at boot**:
+  ```bash
+  uv run feetech-web --serial-port /dev/serial0 --baudrate 1000000 --host 0.0.0.0 --port 8080
+  ```
+- **In Python code**:
+  ```python
+  from feetech_servo import FeetechServo
+
+  servo = FeetechServo()
+  if servo.open('/dev/serial0', baudrate=1000000):
+      print("Connected to URT-1 over Pi 4 hardware UART!")
+  ```
 
 ### Controlling Servos
 
