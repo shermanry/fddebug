@@ -2852,10 +2852,21 @@ def stop_all():
     return jsonify({'success': True})
 
 
-if __name__ == '__main__':
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Feetech Servo Control - Web Interface")
+    parser.add_argument("--port", "-p", type=int, default=8080, help="Port to listen on (default: 8080)")
+    parser.add_argument("--host", default="0.0.0.0", help="Host interface to bind to (default: 0.0.0.0)")
+    parser.add_argument("--debug", action="store_true", help="Enable Flask debug mode")
+    args = parser.parse_args()
+
     print("\n" + "="*50)
     print("  Feetech Servo Control - Web Interface")
     print("="*50)
-    print("\n  Open your browser to: http://localhost:8080")
+    print(f"\n  Open your browser to: http://localhost:{args.port}")
     print("\n  Press Ctrl+C to stop the server\n")
-    app.run(host='0.0.0.0', port=8080, debug=False)
+    app.run(host=args.host, port=args.port, debug=args.debug)
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "feetech-servo"
+version = "2.0.0"
+description = "Feetech Servo Controller library and web interface (SCS, SMS, STS, and HLS series)"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.8"
+dependencies = [
+    "pyserial>=3.5",
+    "flask>=2.0.0",
+]
+
+[project.scripts]
+feetech-web = "servo_web:main"
+
+[tool.setuptools]
+py-modules = ["feetech_servo", "servo_mappings", "servo_web"]

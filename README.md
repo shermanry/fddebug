@@ -1,17 +1,17 @@
 # Feetech Servo Controller
 
-A cross-platform GUI application for controlling Feetech servos (SCS, SMS, STS series).
+A cross-platform GUI application and Python library for controlling Feetech servos (SCS, SMS, STS, and HLS series).
 
 ![Screenshot](https://via.placeholder.com/800x500?text=Feetech+Servo+Controller)
 
 ## Features
 
 - **Multi-servo control**: Control up to 16 servos simultaneously in a 4x4 grid
-- **Auto-detection**: Automatically detects SCS vs STS/SMS servo types
-- **Real-time monitoring**: Live position, voltage, temperature, and load readings
-- **Full EPROM access**: PID tuning, punch, protection limits, LED alarms, and more
-- **Torque control**: Quick enable/disable torque from the main UI
-- **Cross-platform**: Works on macOS and Windows
+- **Auto-detection**: Automatically detects SCS vs STS/SMS vs HLS servo types
+- **Real-time monitoring**: Live position, voltage, temperature, load, and current readings
+- **Full EPROM / SRAM access**: PID tuning, punch, protection limits, LED alarms, runtime PID, and torque limits
+- **Torque control**: Quick enable/disable torque from the main UI, plus HLS torque-limiting support
+- **Cross-platform**: Works on macOS, Linux, and Windows
 
 ## Supported Hardware
 
@@ -29,12 +29,31 @@ A cross-platform GUI application for controlling Feetech servos (SCS, SMS, STS s
 |------|----------|------------|----------|
 | **SCS** | SCS0009, SCS15, SCS215 | 10-bit (0-1023) | Position control |
 | **STS/SMS** | STS3215, SMS_STS | 12-bit (0-4095) | Multi-turn, mode selection, offset |
+| **HLS** | HLS3606 | 12-bit (0-4095) | Torque control (FOC), current/velocity PID, runtime SRAM PID, signed current |
 
 ---
 
-## Installation
+## Installation & Running
 
-### Option 1: Easy Install (Recommended)
+### Using `uv` (Fastest & Recommended)
+
+With [`uv`](https://github.com/astral-sh/uv) installed:
+
+```bash
+# Run directly (automatically manages virtualenv and dependencies):
+uv run feetech-web
+
+# Or specify a custom port / host:
+uv run feetech-web --port 8081
+
+# Install as a global CLI tool:
+uv tool install .
+
+# Or install editable into an existing environment:
+uv pip install -e .
+```
+
+### Option 1: Easy Install Scripts
 
 #### macOS
 
@@ -56,15 +75,16 @@ A cross-platform GUI application for controlling Feetech servos (SCS, SMS, STS s
 
 After the first install, you can run the app using:
 
-| Method | macOS | Windows |
-|--------|-------|---------|
-| **Desktop Shortcut** | Double-click shortcut on Desktop | Double-click shortcut on Desktop |
-| **Quick Launch** | Double-click `run.command` | Double-click `run.bat` |
-| **Command Line** | `python3 servo_web.py` | `python servo_web.py` |
+| Method | Command / Action |
+|--------|------------------|
+| **uv** | `uv run feetech-web` |
+| **Desktop Shortcut** | Double-click shortcut on Desktop |
+| **Quick Launch** | Double-click `run.command` (macOS) or `run.bat` (Windows) |
+| **Command Line** | `python3 servo_web.py` (or `python servo_web.py --port 8080`) |
 
 Then open your browser to: **http://localhost:8080**
 
-### Option 2: Manual Installation
+### Option 2: Standard pip Installation
 
 ```bash
 # Clone or download the repository
@@ -72,6 +92,8 @@ cd fddebug
 
 # Install dependencies
 pip install -r requirements.txt
+# Or install package in editable mode:
+pip install -e .
 
 # Run the application
 python servo_web.py
