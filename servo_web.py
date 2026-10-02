@@ -661,6 +661,7 @@ HTML_TEMPLATE = '''
                 <option value="57600">57.6K</option>
                 <option value="38400">38.4K</option>
             </select>
+            <button onclick="loadPorts()" title="Refresh serial ports" style="padding: 8px 10px;">↻</button>
             <button class="primary" id="connectBtn" onclick="toggleConnect()">Connect</button>
         </div>
     </div>
@@ -1126,27 +1127,32 @@ HTML_TEMPLATE = '''
                     else select.value = data.ports[0];
                 }
 
-                // Add Raspberry Pi hardware UART presets if not already enumerated
-                const rpiPresets = [
-                    {device: '/dev/serial0', label: '/dev/serial0 [Pi 4 Primary UART]'},
-                    {device: '/dev/ttyAMA0', label: '/dev/ttyAMA0 [Pi 4 PL011 UART]'},
-                    {device: '/dev/ttyAMA1', label: '/dev/ttyAMA1 [Pi 4 UART2 / GPIO 0,1]'}
-                ];
-                let addedPresets = false;
-                rpiPresets.forEach(preset => {
-                    if (!existingDevices.has(preset.device)) {
-                        if (!addedPresets) {
-                            select.innerHTML += `<optgroup label="Raspberry Pi Presets">`;
-                            addedPresets = true;
+                // Hardware UART presets only make sense when the server runs on Linux.
+                if (data.platform === 'linux') {
+                    const rpiPresets = [
+                        {device: '/dev/serial0', label: '/dev/serial0 [Pi 4 Primary UART]'},
+                        {device: '/dev/ttyAMA0', label: '/dev/ttyAMA0 [Pi 4 PL011 UART]'},
+                        {device: '/dev/ttyAMA1', label: '/dev/ttyAMA1 [Pi 4 UART2 / GPIO 0,1]'}
+                    ];
+                    const presetGroup = document.createElement('optgroup');
+                    presetGroup.label = 'Raspberry Pi Presets';
+                    rpiPresets.forEach(preset => {
+                        if (!existingDevices.has(preset.device)) {
+                            const option = document.createElement('option');
+                            option.value = preset.device;
+                            option.textContent = preset.label;
+                            presetGroup.appendChild(option);
                         }
-                        select.innerHTML += `<option value="${preset.device}">${preset.label}</option>`;
+                    });
+                    if (presetGroup.children.length) {
+                        select.appendChild(presetGroup);
                     }
-                });
-                if (addedPresets) {
-                    select.innerHTML += `</optgroup>`;
                 }
 
-                select.innerHTML += '<option value="__custom__">Custom port path...</option>';
+                const customOption = document.createElement('option');
+                customOption.value = '__custom__';
+                customOption.textContent = 'Custom port path...';
+                select.appendChild(customOption);
 
                 // If nothing is selected yet, auto-select the first real port option
                 if (!select.value) {
@@ -2313,7 +2319,8 @@ def get_ports():
         device_upper = p.device.upper()
         
         # Skip Bluetooth and debug ports first
-        if 'BLUETOOTH' in desc or 'BLUETOOTH' in hwid or 'BTHENUM' in hwid:
+        if ('BLUETOOTH' in desc or 'BLUETOOTH' in hwid or
+                'BLUETOOTH' in device_upper or 'BTHENUM' in hwid):
             continue
         if 'DEBUG' in device_upper:
             continue
@@ -2348,8 +2355,13 @@ def get_ports():
                         'CH340', 'CH341', 'CH343', 'CP210', 'FTDI', 'FT232', 'PROLIFIC']
             is_adapter = any(pat in desc or pat in device_upper for pat in patterns)
         
+        # Keep every usable serial device visible. Some URT-1 drivers provide no
+        # VID or useful description, especially on macOS and Raspberry Pi OS.
+        if 'HYPERBOOM' in device_upper:
+            continue
+
+        seen_devices.add(p.device)
         if is_adapter:
-            seen_devices.add(p.device)
             # Identify adapter type
             if p.vid == 0x1A86:
                 # WCH chips: CH340, CH341, CH343
@@ -2369,20 +2381,23 @@ def get_ports():
                 adapter_type = 'CH340 (URT-1)'
             else:
                 adapter_type = 'USB-Serial'
-            
-            all_ports.append({
-                'device': p.device,
-                'description': p.description,
-                'type': adapter_type,
-                'interface': 'usb'
-            })
+        else:
+            adapter_type = p.description if p.description and p.description != 'n/a' else 'Serial Port'
+
+        all_ports.append({
+            'device': p.device,
+            'description': p.description,
+            'type': adapter_type,
+            'interface': 'usb' if is_adapter else 'serial'
+        })
     
     return jsonify({
         'ports': [p['device'] for p in all_ports],
         'details': all_ports,
         'connected_port': controller['port'],
         'connected_baud': controller.get('baudrate', 1000000),
-        'connected': bool(controller['servo'] and controller['servo'].is_open())
+        'connected': bool(controller['servo'] and controller['servo'].is_open()),
+        'platform': 'linux' if sys.platform.startswith('linux') else sys.platform
     })
 
 @app.route('/api/connect', methods=['POST'])
@@ -2439,7 +2454,7 @@ def scan():
     found = []
     with lock:
         if controller['servo']:
-            for sid in range(1, 31):  # Scan IDs 1-30
+            for sid in range(1, 51):  # Scan all valid servo IDs (1-50)
                 try:
                     if controller['servo'].ping(sid) >= 0:
                         found.append(sid)
